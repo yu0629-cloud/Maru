@@ -1,0 +1,14 @@
+{
+  "foundation_rate": 0.62,
+  "scan_count": 8,
+  "problem_count": 40,
+  "weak_units": [
+    { "subject": "math", "unit": "つるかめ算", "correct": 2, "total": 8, "rate": 0.25 },
+    { "subject": "math", "unit": "繰り下がり", "correct": 4, "total": 9, "rate": 0.4444 }
+  ],
+  "triage": {
+    "level": "needs_review",
+    "priority_units": ["つるかめ算", "繰り下がり"],
+    "summary": "定着が不安定な単元がある。1日3〜5問の復習枠を守る。"
+  }
+}

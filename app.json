@@ -1,0 +1,86 @@
+{
+  "expo": {
+    "name": "MARU",
+    "slug": "maru",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "maru",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "primaryColor": "#C44738",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "splash": {
+      "image": "./assets/images/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#F7F4EE"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "app.maru.family",
+      "buildNumber": "1",
+      "usesAppleSignIn": true,
+      "infoPlist": {
+        "CFBundleDisplayName": "MARU",
+        "NSCameraUsageDescription": "学習プリントの撮影・取り込みに使用します。",
+        "NSPhotoLibraryUsageDescription": "学習プリントの撮影・取り込みに使用します。",
+        "NSPhotoLibraryAddUsageDescription": "まとめプリントの保存と共有に使用します。",
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "backgroundColor": "#F7F4EE"
+      },
+      "package": "app.maru.family",
+      "versionCode": 1,
+      "permissions": [
+        "CAMERA",
+        "READ_MEDIA_IMAGES",
+        "READ_EXTERNAL_STORAGE"
+      ],
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-dev-client",
+      "./plugins/with-revenuecat",
+      "expo-apple-authentication",
+      "expo-web-browser",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "学習プリントの撮影・取り込みに使用します。",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "react-native-document-scanner-plugin",
+        {
+          "cameraPermission": "学習プリントの撮影・取り込みに使用します。"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "学習プリントの撮影・取り込みに使用します。",
+          "cameraPermission": "学習プリントの撮影・取り込みに使用します。",
+          "microphonePermission": false
+        }
+      ]
+    ],
+    "web": {
+      "favicon": "./assets/images/favicon.png",
+      "bundler": "metro"
+    },
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

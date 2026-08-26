@@ -1,0 +1,105 @@
+import { MOCK_PRINT_PROBLEMS } from "@/src/features/print/mock";
+import type { GradedProblemView } from "@/src/features/grading/corrections";
+import type { GradeResult } from "@/src/types/grading";
+
+export const MOCK_GRADE_RESULT: GradeResult = {
+  overall_score: { earned: 7, max: 10 },
+  problems: [
+    {
+      problem_index: "大問1 (1)",
+      bbox: [80, 60, 260, 940],
+      is_correct: true,
+      student_answer: "72",
+      correct_answer: "72。8×9=72。",
+      topic_tag: "かけ算",
+      difficulty_level: "basic",
+      mistake_type: "none",
+      parent_coaching_tip: "九九は安定しています。「この調子で、次の繰り下がりも同じ丁寧さでいこう」",
+      needs_inpaint: false,
+      problem_type: "calc_block",
+    },
+    {
+      problem_index: "大問1 (2)",
+      bbox: [270, 60, 460, 940],
+      is_correct: false,
+      student_answer: "43",
+      correct_answer: "34。十の位から繰り下がって 12-8=4。",
+      topic_tag: "繰り下がり",
+      difficulty_level: "basic",
+      mistake_type: "concept_gap",
+      parent_coaching_tip:
+        "十の位から借りる意識が抜けています。「怒らないよ。52の2から8は引けないね。隣から1借りて12にしてみよう」",
+      needs_inpaint: true,
+      problem_type: "calc_block",
+    },
+    {
+      problem_index: "大問2",
+      bbox: [480, 60, 820, 940],
+      is_correct: false,
+      student_answer: "つる4ひき、かめ6ひき",
+      correct_answer: "つる3ひき、かめ7ひき。",
+      topic_tag: "つるかめ算",
+      difficulty_level: "advanced",
+      mistake_type: "concept_gap",
+      parent_coaching_tip: "全部かめにしたら足は何本？ そこから一緒に戻そう。",
+      needs_inpaint: true,
+      problem_type: "standard",
+    },
+    {
+      problem_index: "大問3",
+      bbox: [830, 60, 980, 940],
+      is_correct: false,
+      student_answer: "",
+      correct_answer: "正六角形になる場合を確認。",
+      topic_tag: "立体切断",
+      difficulty_level: "advanced",
+      mistake_type: "blank",
+      parent_coaching_tip: "今日は図に線を1本だけ書いてみよう。",
+      needs_inpaint: false,
+      problem_type: "math_geometry_graph",
+    },
+  ],
+};
+
+const IMAGE_BY_TOPIC: Record<string, string> = {
+  かけ算: MOCK_PRINT_PROBLEMS[0].imageSrc ?? "",
+  繰り下がり: MOCK_PRINT_PROBLEMS[0].imageSrc ?? "",
+  つるかめ算: MOCK_PRINT_PROBLEMS[2].imageSrc ?? "",
+  立体切断: MOCK_PRINT_PROBLEMS[1].imageSrc ?? "",
+};
+
+export function gradeResultToView(result: GradeResult, scanId: string): GradedProblemView[] {
+  return result.problems.map((problem, index) => ({
+    id: `${scanId}-p${index + 1}`,
+    problem_index: index + 1,
+    problem_label: problem.problem_index,
+    is_correct: problem.is_correct,
+    mistake_type: problem.mistake_type,
+    parent_coaching_tip: problem.parent_coaching_tip,
+    student_answer: problem.student_answer,
+    correct_answer: problem.correct_answer,
+    topic_tag: problem.topic_tag,
+    imageSrc: IMAGE_BY_TOPIC[problem.topic_tag] ?? MOCK_PRINT_PROBLEMS[0].imageSrc ?? "",
+    needs_inpaint: problem.needs_inpaint,
+    problem_type: problem.problem_type,
+    bbox: problem.bbox,
+  }));
+}
+
+export const MOCK_CARTE = {
+  foundation_rate: 0.62,
+  scan_count: 8,
+  problem_count: 40,
+  triage_level: "needs_review" as const,
+  summary: "定着が不安定な単元がある。1日3〜5問の復習枠を守る。",
+  weak_units: [
+    { unit: "つるかめ算", rate: 0.25, total: 8, correct: 2 },
+    { unit: "繰り下がり", rate: 0.44, total: 9, correct: 4 },
+  ],
+  strong_units: [
+    { unit: "かけ算", rate: 0.9, total: 10, correct: 9 },
+    { unit: "小数", rate: 0.8, total: 5, correct: 4 },
+  ],
+  careless_rate: 0.18,
+  recent_rates: [0.5, 0.55, 0.6, 0.58, 0.62],
+};

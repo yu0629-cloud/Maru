@@ -1,0 +1,92 @@
+import { MOCK_PRINT_PROBLEMS } from "@/src/features/print/mock";
+import { todayIso, type ReviewQueueItem } from "@/src/features/review/select";
+
+const today = todayIso();
+
+function fromPrint(index: number, extra: Partial<ReviewQueueItem> = {}): ReviewQueueItem {
+  const problem = MOCK_PRINT_PROBLEMS[index];
+  return {
+    id: `rq-${index + 1}`,
+    assignmentId: `as-${index + 1}`,
+    problemId: problem.id,
+    status: "queued",
+    nextReviewOn: today,
+    intervalDays: 1,
+    easeFactor: 2.5,
+    consecutiveMisses: 0,
+    consecutiveHits: 0,
+    label: problem.label,
+    topicTag: problem.topicTag,
+    imageSrc: problem.imageSrc ?? "",
+    bbox: problem.bbox,
+    isCorrect: problem.isCorrect ?? false,
+    prompt: problem.prompt,
+    expressions: problem.expressions,
+    modelText: problem.modelText,
+    correctAnswer: problem.correctAnswer,
+    parentCoachingTip: problem.parentCoachingTip,
+    subject: problem.subject,
+    problemType: problem.problemType,
+    ...extra,
+  };
+}
+
+export const MOCK_REVIEW_ITEMS: ReviewQueueItem[] = [
+  fromPrint(0, { id: "rq-1", assignmentId: "as-1", problemId: "p1", status: "active", consecutiveMisses: 1 }),
+  fromPrint(1, { id: "rq-2", assignmentId: "as-2", problemId: "p2" }),
+  fromPrint(2, { id: "rq-3", assignmentId: "as-3", problemId: "p3", status: "active", intervalDays: 3, easeFactor: 2.4, consecutiveMisses: 2 }),
+  fromPrint(3, { id: "rq-4", assignmentId: "as-4", problemId: "p4", consecutiveHits: 1 }),
+  {
+    id: "rq-5",
+    problemId: "p-old",
+    status: "queued",
+    nextReviewOn: today,
+    intervalDays: 1,
+    easeFactor: 2.5,
+    consecutiveMisses: 0,
+    consecutiveHits: 0,
+    label: "大問5",
+    topicTag: "速さ",
+    imageSrc: "",
+    prompt: "分速200mで15分走ると、何km進みますか。",
+    correctAnswer: "時速40km",
+    parentCoachingTip: "みはじの関係を図にしよう。",
+    subject: "math",
+  },
+  {
+    id: "rq-6",
+    problemId: "p-future",
+    status: "queued",
+    nextReviewOn: "2099-01-01",
+    intervalDays: 7,
+    easeFactor: 2.6,
+    consecutiveMisses: 0,
+    consecutiveHits: 2,
+    label: "大問6",
+    topicTag: "割合",
+    imageSrc: "",
+    prompt: "80人のうち20人が欠席したとき、欠席した人の割合は何%ですか。",
+    correctAnswer: "25%",
+    parentCoachingTip: "基準量を先に指さそう。",
+    subject: "math",
+  },
+  {
+    id: "rq-leech",
+    problemId: "p-leech",
+    status: "leech",
+    nextReviewOn: today,
+    intervalDays: 1,
+    easeFactor: 1.4,
+    consecutiveMisses: 3,
+    consecutiveHits: 0,
+    leechAt: "2026-08-23T10:00:00.000Z",
+    label: "大問L",
+    topicTag: "つるかめ算",
+    imageSrc: "",
+    prompt: "つるとかめが合わせて10ひきいます。足の数が全部で34本のとき、つるとかめはそれぞれ何ひきですか。",
+    correctAnswer: "つる3ひき、かめ7ひき。",
+    parentCoachingTip:
+      "3回連続でつまずいています。カルテから「理解できた」か「もう一度復習する」を選べます。",
+    subject: "math",
+  },
+];
