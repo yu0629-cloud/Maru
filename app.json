@@ -40,9 +40,14 @@
       "permissions": [
         "CAMERA",
         "READ_MEDIA_IMAGES",
-        "READ_EXTERNAL_STORAGE"
+        "READ_EXTERNAL_STORAGE",
+        "android.permission.CAMERA",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.CAMERA"
       ],
       "blockedPermissions": [
+        "android.permission.RECORD_AUDIO",
         "android.permission.RECORD_AUDIO"
       ]
     },
@@ -81,6 +86,14 @@
     },
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "f7365415-180c-4716-9c79-dc6b5b8572c9"
+      }
+    },
+    "updates": {
+      "url": "https://u.expo.dev/f7365415-180c-4716-9c79-dc6b5b8572c9"
     }
   }
 }
