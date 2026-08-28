@@ -8,8 +8,16 @@ import { useChildStore } from "@/src/stores/childStore";
 import { useQuotaStore } from "@/src/stores/quotaStore";
 import { useReviewStore } from "@/src/stores/reviewStore";
 import type { Database, GradeCode, SubjectCode } from "@/src/types/database";
+import { normalizeSubjects } from "@/src/features/scans/subject";
 
 type Child = Database["public"]["Tables"]["children"]["Row"];
+
+function withNormalizedSubjects(child: Child): Child {
+  return {
+    ...child,
+    target_subjects: normalizeSubjects(child.target_subjects),
+  };
+}
 
 export type ChildDraft = {
   name: string;
@@ -52,7 +60,10 @@ export async function hydrateChildren() {
       if (raw) {
         try {
           const parsed = JSON.parse(raw) as { children: Child[]; currentChildId: string | null };
-          useChildStore.getState().setChildren(parsed.children ?? [], parsed.currentChildId);
+          useChildStore.getState().setChildren(
+            (parsed.children ?? []).map(withNormalizedSubjects),
+            parsed.currentChildId,
+          );
         } catch {
           useChildStore.getState().setChildren([MOCK_CHILD]);
         }
@@ -76,7 +87,7 @@ export async function hydrateChildren() {
     .order("sort_order", { ascending: true });
   if (error) throw error;
   useChildStore.getState().setChildren(
-    (data ?? []) as Child[],
+    ((data ?? []) as Child[]).map(withNormalizedSubjects),
     (profile as { current_child_id?: string | null } | null)?.current_child_id ?? null,
   );
   return useChildStore.getState().children;

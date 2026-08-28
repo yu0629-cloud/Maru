@@ -99,7 +99,16 @@ npx supabase functions deploy grade-scan
 npx supabase functions deploy inpaint-handwriting
 npx supabase functions deploy sync-revenuecat
 npx supabase functions deploy delete-account
+npx supabase functions deploy purge-expired-media
 ```
+
+Secrets:
+
+```bash
+npx supabase secrets set PURGE_CRON_SECRET=<random>
+```
+
+定期削除は Dashboard の Scheduled Functions、または外部 cron から毎日 `POST /functions/v1/purge-expired-media`（Header `x-cron-secret`）を叩いてください。採点テキストは消えません。
 
 ## 2. 型チェックと契約テスト
 
@@ -111,6 +120,7 @@ npm run test:inpaint
 npm run test:print-review
 npm run test:leech
 npm run test:scan-ui
+npm run test:retention
 npm run test:account
 ```
 

@@ -3,7 +3,7 @@ import { geminiBBoxToNormalizedBox } from "./bbox.ts";
 import { HttpError } from "./errors.ts";
 import { createGeminiClient, type GeminiClient, type GeminiImagePart } from "./gemini.ts";
 import { base64ToBytes, bytesToBase64, fetchImageAsBase64, guessMimeType, stripDataUrl } from "./image.ts";
-import { inpaintTargetsFromInserts, inferSubject, toProblemInserts } from "./persist.ts";
+import { inpaintTargetsFromInserts, toProblemInserts } from "./persist.ts";
 import { buildSystemPrompt, buildUserPrompt, gradeCodeToLabel } from "./prompt.ts";
 import { buildEnrichSystemPrompt, buildEnrichUserPrompt } from "./enrich.ts";
 import { countCorrect, shouldQueueInpaint, validateGradeResult } from "./validate.ts";
@@ -36,6 +36,7 @@ export type GradeScanOutput = {
   ok: true;
   dryRun: boolean;
   scanId: string | null;
+  subject: GradeResult["subject"];
   overall_score: GradeResult["overall_score"];
   problems: GradeResult["problems"];
   persisted: GradeScanPersisted;
@@ -303,7 +304,7 @@ async function persistGradeOutcome(
     .from("scans")
     .update({
       status: jobs.length > 0 ? "inpainting" : "completed",
-      subject: inserts[0]?.subject ?? null,
+      subject: result.subject ?? inserts[0]?.subject ?? "other",
       total_problems: counts.total,
       correct_count: counts.correct,
       incorrect_count: counts.incorrect,
@@ -353,13 +354,13 @@ async function applyIncorrectEnrichment(input: {
       .from("problems")
       .update({
         unit: item.topic_tag,
+        topic: item.topic_tag,
         topic_tags: [item.topic_tag],
         parent_coaching_tip:
           problem.parent_coaching_tip.length >= 8
             ? problem.parent_coaching_tip
             : enrichCoachingTip(problemType, item.parent_coaching_tip, false),
         mistake_type: problem.student_answer ? item.mistake_type : "blank",
-        subject: inferSubject(item.topic_tag, problemType),
         problem_type: problemType,
       })
       .eq("scan_id", input.scan.id)
@@ -541,6 +542,7 @@ async function runDirectGradeScan(
       ok: true,
       dryRun: false,
       scanId,
+      subject: result.subject,
       overall_score: result.overall_score,
       problems: result.problems,
       persisted: estimatedPersisted(result),
@@ -627,6 +629,7 @@ export async function executeGradeScan(
         ok: true,
         dryRun: true,
         scanId: scan?.id ?? input.scanId ?? null,
+        subject: result.subject,
         overall_score: result.overall_score,
         problems: result.problems,
         persisted: {
@@ -675,6 +678,7 @@ export async function executeGradeScan(
       ok: true,
       dryRun: false,
       scanId: scan.id,
+      subject: result.subject,
       overall_score: result.overall_score,
       problems: result.problems,
       persisted: estimatedPersisted(result),

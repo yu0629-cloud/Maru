@@ -7,13 +7,17 @@ export function calcExpressionsOf(item: {
   questionText?: string;
 }): string[];
 export function looksLikeMath(text?: string | null): boolean;
+export function extractMathExpression(text?: string | null): string;
 export function extractQuestionText(item: {
   questionText?: string;
   question_text?: string;
   prompt?: string;
   problemIndex?: string;
   problem_index?: string;
+  problem_label?: string;
   label?: string;
+  correctAnswer?: string;
+  correct_answer?: string;
 }): string;
 export function formatMathExpression(text?: string | null): string;
 export function formatProblemStem(text: string | null | undefined, number: number): string;
@@ -21,9 +25,14 @@ export function flattenWorksheetItems(problems: unknown[]): Array<{
   id: string;
   number: number;
   kind: "calc" | "text";
+  layout: "compact" | "wide";
   stem: string;
 }>;
-export const WORKSHEET_PER_PAGE: 16;
+export function packWorksheetRows<T extends { layout?: string }>(items: T[]): T[][];
+export function paginateWorksheetRows<T>(rows: T[][], maxRows?: number): T[][][];
+export function paginateWorksheetItems<T>(items: T[], perPage?: number): T[][];
+export const WORKSHEET_PER_PAGE: 6;
+export const PRINT_ROWS_PER_PAGE: 3;
 export function chooseAnswerStyle(input: {
   topicTag?: string;
   unit?: string;
@@ -56,6 +65,7 @@ export function buildPrintHtml(input: {
   dateLabel?: string;
   includeCheatSheet?: boolean;
   perPage?: number;
+  scope?: "daily" | "all";
   problems: Array<{
     id: string;
     label: string;
@@ -74,3 +84,32 @@ export function buildPrintHtml(input: {
     answerStyle?: "calc" | "geometry" | "graph" | "kanji" | "lined" | "diagram" | "essay";
   }>;
 }): string;
+export function toClipItems(problems?: unknown[]): Array<{
+  id: string;
+  number: number;
+  layout: "compact" | "wide";
+  cropBox: { x: number; y: number; width: number; height: number };
+  mask?: { x: number; y: number; width: number; height: number; kind: string };
+  imageSrc: string;
+  originalImageSrc: string;
+  isBlanked: boolean;
+  cropMode: string;
+  problemType?: string;
+  label: string;
+  questionText?: string;
+  correctAnswer?: string;
+  mediaExpired?: boolean;
+}>;
+export function packClipRows<T>(items: T[]): T[][];
+export function paginateClipRows<T>(rows: T[][], maxHeightMm?: number): T[][][];
+export function layoutKind(problem: unknown, cropBox?: unknown): "compact" | "wide";
+export function expandPrintCropBox(box: {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}): { x: number; y: number; width: number; height: number };
+export function answerMaskBox(
+  original: { x: number; y: number; width: number; height: number },
+  expanded?: { x: number; y: number; width: number; height: number },
+): { x: number; y: number; width: number; height: number; kind: string };

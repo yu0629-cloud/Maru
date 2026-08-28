@@ -3,18 +3,23 @@ import { useAuthStore } from "@/src/stores/authStore";
 import { restoreLocalAuth } from "@/src/features/auth/service";
 import { supabase } from "@/src/lib/supabase/client";
 import { setMemoryAccessToken } from "@/src/lib/supabase/access-token";
-import { isMockMode } from "@/src/lib/env";
+import { shouldMockAuth } from "@/src/lib/env";
 
 export function useAuth() {
-  const store = useAuthStore();
+  const ready = useAuthStore((state) => state.ready);
+  const userId = useAuthStore((state) => state.userId);
+  const email = useAuthStore((state) => state.email);
+  const displayName = useAuthStore((state) => state.displayName);
+  const isAnonymous = useAuthStore((state) => state.isAnonymous);
+  const mocked = useAuthStore((state) => state.mocked);
 
   useEffect(() => {
-    if (store.ready) return;
+    if (ready) return;
     void restoreLocalAuth();
-  }, [store.ready]);
+  }, [ready]);
 
   useEffect(() => {
-    if (isMockMode()) return;
+    if (shouldMockAuth()) return;
     const { data } = supabase.auth.onAuthStateChange((event, session) => {
       setMemoryAccessToken(session?.access_token ?? null);
       if (useAuthStore.getState().mocked) return;
@@ -36,12 +41,12 @@ export function useAuth() {
   }, []);
 
   return {
-    ready: store.ready,
-    userId: store.userId,
-    email: store.email,
-    displayName: store.displayName,
-    isAnonymous: store.isAnonymous,
-    mocked: store.mocked,
-    signedIn: Boolean(store.userId),
+    ready,
+    userId,
+    email,
+    displayName,
+    isAnonymous,
+    mocked,
+    signedIn: Boolean(userId),
   };
 }

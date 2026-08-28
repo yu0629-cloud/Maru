@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { describeQuota, previewQuotaState } from "@/src/constants/plans";
+import { describeQuota, FREE_SCAN_GRANT, previewQuotaState } from "@/src/constants/plans";
 import type { SubscriptionTier } from "@/src/types/database";
 
 type QuotaState = {
@@ -12,6 +12,7 @@ type QuotaState = {
   applyPreview: (tier: SubscriptionTier) => void;
   clearPreview: () => void;
   consumeOne: () => boolean;
+  resetFreeScansForDebug: () => void;
 };
 
 export const useQuotaStore = create<QuotaState>((set, get) => ({
@@ -42,4 +43,5 @@ export const useQuotaStore = create<QuotaState>((set, get) => ({
     set({ extraTicketBalance: current.extraTicketBalance - 1 });
     return true;
   },
+  resetFreeScansForDebug: () => set({ freeScansRemaining: FREE_SCAN_GRANT }),
 }));

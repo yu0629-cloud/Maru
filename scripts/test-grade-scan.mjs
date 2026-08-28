@@ -171,15 +171,61 @@ const extracted = parseExtractProblems({
     { problem_index: "漢字", student_answer: "", correct_answer: "山", type: "text" },
   ],
 });
+assert.equal(extracted[0].question_text, "8×9");
 const hybrid = gradeExtractedProblems(extracted);
 assert.equal(hybrid.overall_score.earned, 1);
 assert.equal(hybrid.problems[0].is_correct, true);
+assert.equal(hybrid.problems[0].question_text, "8×9");
 assert.deepEqual(hybrid.problems[0].bbox, [80, 60, 180, 420]);
 assert.deepEqual(hybrid.problems[1].bbox, placeholderBBox(1, 2));
 assert.equal(hybrid.problems[1].mistake_type, "blank");
 assert.ok(hybrid.problems[1].parent_coaching_tip.length <= 20);
 assert.equal(hybrid.problems[0].parent_coaching_tip, "");
 pass("ハイブリッド採点は計算をプログラム判定し、不正解のみ定型ヒントを返す");
+
+const aliasExtracted = parseExtractProblems({
+  questions: [
+    {
+      question_number: "3",
+      question_text: "0 + 7 =",
+      user_answer: "0",
+      correct_answer: "7",
+      is_correct: false,
+      topic: "たし算",
+    },
+  ],
+});
+assert.equal(aliasExtracted[0].problem_index, "3");
+assert.equal(aliasExtracted[0].question_text, "0 + 7 =");
+assert.equal(aliasExtracted[0].student_answer, "0");
+const aliasGraded = gradeExtractedProblems(aliasExtracted);
+assert.equal(aliasGraded.problems[0].is_correct, false);
+assert.equal(aliasGraded.problems[0].question_text, "0 + 7 =");
+assert.equal(aliasGraded.problems[0].topic_tag, "たし算");
+pass("questions / question_text / user_answer エイリアスから問題文を残す");
+
+const numberOnlyStem = parseExtractProblems({
+  problems: [
+    {
+      problem_index: "16",
+      question_text: "16",
+      student_answer: "6",
+      correct_answer: "6",
+      type: "math",
+    },
+    {
+      problem_index: "16",
+      question_text: "2 + 4 =",
+      student_answer: "6",
+      correct_answer: "6",
+      type: "math",
+    },
+  ],
+});
+assert.equal(numberOnlyStem[0].problem_index, "16");
+assert.equal(numberOnlyStem[0].question_text, "");
+assert.equal(numberOnlyStem[1].question_text, "2 + 4 =");
+pass("question_text が問題番号だけのときは捨て、式は残す");
 
 const recovered = parseJsonPayload(
   `{"problems":[{"problem_index":"8+2","student_answer":"10","correct_answer":"10","type":"math","bbox":[10,20,80,200]},{"problem_index":"9+1","student_answer":"`,
@@ -194,13 +240,13 @@ const schemaBlock = schemaSrc.slice(schemaSrc.indexOf("GRADE_RESPONSE_SCHEMA"), 
 assert.match(schemaSrc, /GEMINI_MODEL = "gemini-3\.5-flash-lite"/);
 assert.match(schemaBlock, /enum: \["math", "text"\]/);
 assert.match(schemaBlock, /bbox/);
-assert.match(schemaBlock, /"problem_index", "student_answer", "correct_answer", "type", "bbox"/);
+assert.match(schemaBlock, /"problem_index", "question_text", "student_answer", "correct_answer", "type", "topic", "bbox"/);
 assert.doesNotMatch(schemaBlock, /difficulty_level/);
 assert.doesNotMatch(schemaBlock, /mistake_type/);
 assert.doesNotMatch(schemaBlock, /needs_inpaint/);
 assert.doesNotMatch(schemaBlock, /problem_type/);
 assert.doesNotMatch(schemaBlock, /parent_coaching_tip/);
-assert.doesNotMatch(schemaBlock, /question_text/);
+assert.match(schemaBlock, /question_text/);
 assert.match(geminiSrc, /GEMINI_MAX_OUTPUT_TOKENS = 2048/);
 assert.match(geminiSrc, /GEMINI_FETCH_TIMEOUT_MS = 15_000/);
 assert.match(geminiSrc, /thinkingConfigForModel/);
@@ -217,19 +263,106 @@ assert.doesNotMatch(geminiSrc, /x-goog-api-key/);
 pass("Gemini 呼び出しが REST 直叩き・既定は 3.5 flash-lite");
 
 const promptSrc = readFileSync(join(root, "supabase/functions/grade-scan/prompt.ts"), "utf8");
-assert.match(promptSrc, /problem_index, student_answer, correct_answer, type, bbox/);
+assert.match(promptSrc, /problem_index, question_text, student_answer, correct_answer, type, topic, bbox/);
 assert.match(promptSrc, /1問=1件/);
-assert.match(promptSrc, /5キー以外は出すな/);
+assert.match(promptSrc, /2 \+ 6 =/);
+assert.match(promptSrc, /解答欄/);
+assert.match(promptSrc, /すぐ右/);
 assert.match(promptSrc, /\[ymin, xmin, ymax, xmax\]/);
 assert.match(promptSrc, /手書き/);
 assert.match(promptSrc, /等号/);
 assert.match(promptSrc, /薄い鉛筆/);
 assert.match(promptSrc, /雪だるま/);
 assert.match(promptSrc, /採点・思考・解説は禁止/);
-assert.doesNotMatch(promptSrc, /question_text/);
+assert.match(promptSrc, /0 \+ 7 =/);
+assert.match(schemaBlock, /Answer slot immediately to the right/);
+assert.match(schemaBlock, /NEVER only a question number/);
+assert.match(schemaBlock, /circled or leading/);
+assert.match(promptSrc, /【抽出例】/);
+assert.match(promptSrc, /⑯/);
+assert.match(promptSrc, /2 \+ 4 =/);
+assert.match(promptSrc, /problem_index: "16"/);
+assert.match(promptSrc, /問題番号だけ/);
 assert.doesNotMatch(promptSrc, /calc_block としてまとめ/);
 assert.doesNotMatch(promptSrc, /parent_coaching_tip は不正解/);
 pass("システムプロンプトが抽出のみを指示し採点を禁止する");
+
+const { resolveScanSubject, normalizeSubject, DEFAULT_SUBJECT, SUBJECT_CODES } = await import(
+  pathToFileURL(join(root, "supabase/functions/grade-scan/subject.mjs")).href,
+);
+assert.deepEqual(
+  [...SUBJECT_CODES],
+  [
+    "math",
+    "japanese",
+    "spelling_phonics",
+    "reading",
+    "writing_grammar",
+    "science",
+    "social_studies",
+    "world_languages",
+    "other",
+  ],
+);
+assert.equal(normalizeSubject("国語"), "japanese");
+assert.equal(normalizeSubject("MATH"), "math");
+assert.equal(normalizeSubject("english"), "world_languages");
+assert.equal(normalizeSubject("社会"), "social_studies");
+assert.equal(normalizeSubject("spelling"), "spelling_phonics");
+assert.equal(resolveScanSubject({ subject: "english" }), "world_languages");
+assert.equal(resolveScanSubject({ subject: "social" }), "social_studies");
+assert.equal(
+  resolveScanSubject({
+    problems: [{ topic_tag: "漢字書き取り", problem_type: "kanji" }],
+  }),
+  "japanese",
+);
+assert.equal(
+  resolveScanSubject({
+    problems: [{ topic_tag: "Phonics CVC", problem_type: "standard" }],
+  }),
+  "spelling_phonics",
+);
+assert.equal(
+  resolveScanSubject({
+    problems: [{ topic_tag: "Reading Comprehension" }],
+  }),
+  "reading",
+);
+assert.equal(resolveScanSubject({}), DEFAULT_SUBJECT);
+assert.equal(DEFAULT_SUBJECT, "other");
+pass("プリント教科は Gemini 値を正規化し、欠落時は other に落とす");
+
+assert.match(schemaBlock, /subject/);
+assert.match(schemaBlock, /enum: SUBJECT_CODES/);
+assert.match(schemaBlock, /required: \["subject", "problems"\]/);
+assert.match(promptSrc, /subject はプリント全体の教科/);
+assert.match(promptSrc, /spelling_phonics/);
+assert.match(promptSrc, /world_languages/);
+assert.match(promptSrc, /ひらがな・漢字/);
+assert.match(promptSrc, /アルファベット/);
+assert.match(promptSrc, /迷ったら other/);
+assert.match(promptSrc, /topic は必須/);
+assert.match(promptSrc, /くり上がりのある足し算/);
+assert.match(schemaBlock, /required: \["problem_index".*"topic", "bbox"\]/s);
+assert.match(
+  readFileSync(join(root, "supabase/functions/grade-scan/persist.ts"), "utf8"),
+  /resolveScanSubject/,
+);
+assert.match(
+  readFileSync(join(root, "supabase/functions/grade-scan/pipeline.ts"), "utf8"),
+  /subject: result\.subject/,
+);
+const scanSubjectSql = readFileSync(join(root, "supabase/migrations/20240827000020_scan_subject.sql"), "utf8");
+assert.match(scanSubjectSql, /scans\.subject/);
+const appSubject = await import(pathToFileURL(join(root, "src/features/scans/lib/subject.mjs")).href);
+assert.deepEqual([...appSubject.SUBJECT_CODES], [...SUBJECT_CODES]);
+assert.equal(appSubject.SUBJECT_BADGES.math, "📘 算数・数学");
+assert.equal(appSubject.SUBJECT_BADGES.japanese, "📕 国語");
+assert.equal(appSubject.normalizeSubject("english"), "world_languages");
+assert.equal(appSubject.normalizeSubject("social"), "social_studies");
+pass("教科スキーマ・プロンプト・DB コメントとバッジ表記が揃っている");
+
 
 const enrichSrc = readFileSync(join(root, "supabase/functions/grade-scan/enrich.ts"), "utf8");
 assert.match(enrichSrc, /parent_coaching_tip/);
@@ -246,18 +379,26 @@ const pipelineSrc = readFileSync(join(root, "supabase/functions/grade-scan/pipel
 assert.match(pipelineSrc, /waitUntil/);
 pass("HTTP 層は storagePath のみ受け取り Base64 を拒否する");
 
+const persistSrc = readFileSync(join(root, "supabase/functions/grade-scan/persist.ts"), "utf8");
+assert.match(persistSrc, /question_text: problem\.question_text/);
+assert.match(persistSrc, /topic: problem\.topic_tag/);
+assert.match(
+  readFileSync(join(root, "supabase/migrations/20240827000021_problem_topic.sql"), "utf8"),
+  /ADD COLUMN IF NOT EXISTS topic/,
+);
+pass("problems.topic を永続化する");
+
 const serviceSrc = readFileSync(join(root, "src/features/grading/service.ts"), "utf8");
 assert.match(serviceSrc, /storagePath: uploaded.storagePath/);
 assert.doesNotMatch(serviceSrc, /imageBase64:/);
 pass("クライアントは Storage アップロード後にパスだけ送る");
 
-const cameraSrc = readFileSync(join(root, "app/(app)/camera/index.tsx"), "utf8");
-assert.match(cameraSrc, /CameraView/);
-assert.match(cameraSrc, /expo-camera/);
+const cameraSrc = readFileSync(join(root, "app/(app)/(tabs)/camera/index.tsx"), "utf8");
+assert.match(cameraSrc, /scanPaperDocuments/);
 assert.match(cameraSrc, /enqueueScanJob/);
 assert.doesNotMatch(cameraSrc, /launchCameraAsync/);
 assert.doesNotMatch(cameraSrc, /await runGradePipeline/);
-pass("撮影はアプリ内 CameraView で行い ImagePicker カメラを使わない");
+pass("撮影はドキュメントスキャナーで行い ImagePicker カメラを使わない");
 
 const compressSrc = readFileSync(join(root, "src/lib/files/scan-image.ts"), "utf8");
 assert.match(compressSrc, /SCAN_JPEG_QUALITY = 0\.6/);

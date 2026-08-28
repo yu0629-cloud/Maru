@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import * as Linking from "expo-linking";
 import { restoreLocalAuth, createSessionFromUrl } from "@/src/features/auth/service";
-import { isMockMode } from "@/src/lib/env";
+import { shouldMockAuth } from "@/src/lib/env";
 
 export function AuthSessionBootstrap() {
   useEffect(() => {
@@ -9,7 +9,7 @@ export function AuthSessionBootstrap() {
   }, []);
 
   useEffect(() => {
-    if (isMockMode()) return;
+    if (shouldMockAuth()) return;
     const handle = ({ url }: { url: string }) => {
       void createSessionFromUrl(url);
     };

@@ -1,3 +1,5 @@
+import { resolveScanSubject } from "./subject.mjs";
+
 export const GRADE_KINDS = ["math", "text"];
 
 export const COACHING_TIP_MAX = 20;
@@ -244,20 +246,49 @@ export function templateTip(kind, isCorrect, studentAnswer) {
   return (KIND_TIPS[kind] ?? KIND_TIPS.text).slice(0, COACHING_TIP_MAX);
 }
 
-export function parseExtractProblems(raw) {
+function looksLikePrintedFormula(text) {
+  const value = String(text ?? "").trim();
+  if (!value) return false;
+  return /[0-9０-９].*[+\-×÷＋−*/=＝]/.test(value) || /[+\-×÷＋−*/=＝].*[0-9０-９]/.test(value);
+}
+
+/** 「16」「⑯」「問16」など、問題番号だけ（数式ではない） */
+export function isQuestionNumberOnly(text) {
+  const value = String(text ?? "")
+    .trim()
+    .normalize("NFKC");
+  if (!value || looksLikePrintedFormula(value)) return false;
+  return /^(?:問|No\.?|#)?[\s(（]*[0-9０-９①-⑳㉑-㉟❶-❿]{1,3}[)）]?[.．、号番]?$/i.test(value);
+}
+
+export function extractProblemList(raw) {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
     throw new Error("EXTRACT_NOT_OBJECT");
   }
-  const problems = raw.problems;
+  const problems = raw.problems ?? raw.questions;
   if (!Array.isArray(problems) || problems.length === 0) {
     throw new Error("EXTRACT_PROBLEMS_REQUIRED");
   }
+  return problems;
+}
+
+export function parseExtractProblems(raw) {
+  const problems = extractProblemList(raw);
   return problems.map((item, index) => {
     const row = item && typeof item === "object" && !Array.isArray(item) ? item : {};
-    const problemIndex = String(row.problem_index ?? `問${index + 1}`).trim() || `問${index + 1}`;
-    const questionText = String(row.question_text ?? row.problem_index ?? "").trim();
-    const studentAnswer = String(row.student_answer ?? "").trim();
+    const rawPrinted = String(row.question_text ?? row.questionText ?? row.prompt ?? "").trim();
+    const printedIsIndex = isQuestionNumberOnly(rawPrinted);
+    const printed = printedIsIndex ? "" : rawPrinted;
+    const numberLike = String(
+      row.problem_index ?? row.question_number ?? (printedIsIndex ? rawPrinted : ""),
+    ).trim();
+    const formulaInIndex = looksLikePrintedFormula(numberLike);
+    const problemIndex =
+      formulaInIndex && !printed ? String(index + 1) : numberLike || `問${index + 1}`;
+    const questionText = printed || (formulaInIndex ? numberLike : "");
+    const studentAnswer = String(row.student_answer ?? row.user_answer ?? row.userAnswer ?? "").trim();
     const correctAnswer = String(row.correct_answer ?? "").trim();
+    const topic = String(row.topic ?? row.topic_tag ?? "").trim();
     const kind =
       normalizeGradeKind(row.type) ??
       inferGradeKind({ questionText, problemIndex, correctAnswer });
@@ -267,12 +298,13 @@ export function parseExtractProblems(raw) {
       student_answer: studentAnswer,
       correct_answer: correctAnswer,
       type: kind,
+      topic,
       bbox: parseGeminiBBox(row.bbox),
     };
   });
 }
 
-export function gradeExtractedProblems(extracted) {
+export function gradeExtractedProblems(extracted, subjectHint) {
   const total = extracted.length;
   const problems = extracted.map((item, index) => {
     const isCorrect =
@@ -294,12 +326,17 @@ export function gradeExtractedProblems(extracted) {
 
     return {
       problem_index: item.problem_index,
+      question_text: item.question_text,
       bbox: coerceGeminiBBox(item.bbox, index, total),
       is_correct: isCorrect,
       student_answer: item.student_answer,
       correct_answer:
         expected !== null && item.type === "math" ? String(expected) : item.correct_answer,
-      topic_tag: (item.question_text || item.problem_index || "未分類").slice(0, 20),
+      topic_tag: (
+        item.topic ||
+        (item.question_text && !isQuestionNumberOnly(item.question_text) ? item.question_text : "") ||
+        "未分類"
+      ).slice(0, 40),
       difficulty_level: "standard",
       mistake_type: isCorrect ? "none" : blank ? "blank" : item.type === "math" ? "careless" : "concept_gap",
       parent_coaching_tip: templateTip(item.type, isCorrect, item.student_answer),
@@ -310,20 +347,24 @@ export function gradeExtractedProblems(extracted) {
 
   const earned = problems.filter((problem) => problem.is_correct).length;
   return {
+    subject: resolveScanSubject({ subject: subjectHint, problems }),
     overall_score: { earned, max: problems.length },
     problems,
   };
 }
 
 export function gradeFromGeminiPayload(raw) {
-  const problems = raw && typeof raw === "object" ? raw.problems : null;
+  if (!raw || typeof raw !== "object") return null;
+  const problems = raw.problems ?? raw.questions;
   if (!Array.isArray(problems) || problems.length === 0) return null;
   const first = problems[0];
   if (!first || typeof first !== "object" || Array.isArray(first)) return null;
   const extractLike =
     normalizeGradeKind(first.type) !== null ||
     isGradeKind(first.type) ||
-    !("bbox" in first);
+    "question_number" in first ||
+    "user_answer" in first ||
+    (!("bbox" in first) && !("is_correct" in first));
   if (!extractLike) return null;
-  return gradeExtractedProblems(parseExtractProblems(raw));
+  return gradeExtractedProblems(parseExtractProblems({ ...raw, problems }), raw.subject);
 }

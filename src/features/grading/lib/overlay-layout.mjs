@@ -63,9 +63,9 @@ export function gradeMarkFromMappedBox(box) {
   return { cx, cy, r, x: cx - r, y: cy - r, size: r * 2 };
 }
 
-export const EQUALS_X_RATIO = 0.72;
-export const ANSWER_X_RATIO = 0.82;
-export const BLANK_ANSWER_GAP_RATIO = 0.7;
+export const EQUALS_X_RATIO = 0.88;
+export const ANSWER_X_RATIO = 0.88;
+export const BLANK_ANSWER_GAP_RATIO = 0.35;
 export const MARK_RADIUS = 22;
 export const MARK_RADIUS_MIN = 20;
 export const MARK_RADIUS_MAX = 25;
@@ -139,14 +139,29 @@ function printedWidth(box, typicalW) {
   return Math.min(box.width, typicalW * 1.15);
 }
 
+/** 解答欄だけの狭い bbox（式全体の横長行・手書きで縦に伸びた行ではない） */
+export function isAnswerSlotBox(box, typicalW) {
+  if (!box || !(box.width > 0) || !(box.height > 0)) return false;
+  const ratio = box.width / Math.max(box.height, 1);
+  if (box.height >= box.width * 0.65 && box.width >= 90) return false;
+  if (ratio <= 2.5 && box.width <= 90) return true;
+  if (typicalW > 120 && box.width <= typicalW * 0.4 && ratio <= 3.2) return true;
+  return false;
+}
+
 function answerAnchorX(box, typicalW, rowH) {
+  if (isAnswerSlotBox(box, typicalW)) return box.x + box.width / 2;
   const width = printedWidth(box, typicalW);
-  const equalsX = box.x + width * EQUALS_X_RATIO;
-  const gap = clamp(rowH * BLANK_ANSWER_GAP_RATIO, 16, 28);
-  return equalsX + gap;
+  const fromRight = clamp(rowH * 0.15, 6, 14);
+  return box.x + width - fromRight;
 }
 
 function columnAnswerX(column, typicalW, rowH) {
+  const boxes = column.map((item) => item.box);
+  const slots = boxes.filter((box) => isAnswerSlotBox(box, typicalW));
+  if (slots.length >= Math.max(1, column.length * 0.5)) {
+    return median(slots.map((box) => box.x + box.width / 2));
+  }
   return median(column.map((item) => answerAnchorX(item.box, typicalW, rowH)));
 }
 

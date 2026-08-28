@@ -1,18 +1,21 @@
-import { Pressable, Text, View } from "react-native";
-import { router } from "expo-router";
+import { Pressable, Text } from "react-native";
+import { push } from "@/src/lib/nav/href";
 import { useQuota } from "@/src/hooks/useQuota";
+import { t } from "@/src/i18n";
 
 export function QuotaBadge() {
   const quota = useQuota();
   return (
     <Pressable
-      onPress={() => router.push("/(app)/settings/billing")}
+      onPress={() => push("/(app)/settings/billing")}
+      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
       className="self-start rounded-full bg-white px-3 py-1"
+      style={{ zIndex: 2 }}
     >
       <Text className="text-sm font-semibold text-ink">
-        {quota.previewTier ? "テスト " : ""}
-        残 {quota.remaining}枚
-        {quota.ticketBalance > 0 ? ` ／ チケット ${quota.ticketBalance}` : ""}
+        {quota.previewTier ? `${t("quota.test")} ` : ""}
+        {t("quota.remaining", { count: quota.remaining })}
+        {quota.ticketBalance > 0 ? ` ／ ${t("quota.tickets", { count: quota.ticketBalance })}` : ""}
       </Text>
     </Pressable>
   );

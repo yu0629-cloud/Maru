@@ -78,7 +78,8 @@
           "cameraPermission": "学習プリントの撮影・取り込みに使用します。",
           "microphonePermission": false
         }
-      ]
+      ],
+      "expo-localization"
     ],
     "web": {
       "favicon": "./assets/images/favicon.png",

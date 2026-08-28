@@ -28,6 +28,10 @@ export const PLAN_ENTITLEMENTS = {
 };
 
 export const FREE_SCAN_GRANT = 10;
+export const PAYWALL_FREE_CARRYOVER_MESSAGE =
+  "無料お試し枠の10枚が終わりました！有料プランに登録すると、今回の採点データと画像をそのまま引き継いで、復習プリント作成やカルテ分析を続けられます。";
+export const PAYWALL_PAID_QUOTA_EXHAUSTED_MESSAGE =
+  "プランを変更するか、追加チケットを購入してください。";
 export const MAX_CHILDREN_ABSOLUTE = 3;
 export const MAX_CONCURRENT_DEVICES = 2;
 
@@ -138,6 +142,10 @@ export function tierFromEntitlementIds(ids) {
 
 export function canPurchaseTickets(tier) {
   return tier !== "free";
+}
+
+export function quotaExhaustedMessage(tier) {
+  return tier === "free" ? PAYWALL_FREE_CARRYOVER_MESSAGE : PAYWALL_PAID_QUOTA_EXHAUSTED_MESSAGE;
 }
 
 export function maxChildrenForTier(tier) {

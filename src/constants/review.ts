@@ -21,10 +21,13 @@ export const GRADE_LABELS = {
 } as const;
 
 export const SUBJECT_LABELS = {
-  math: "算数",
-  japanese: "国語",
-  science: "理科",
-  social: "社会",
-  english: "英語",
+  math: "算数・数学",
+  japanese: "国語（日本）",
+  spelling_phonics: "スペル・フォニックス・語彙",
+  reading: "読解",
+  writing_grammar: "文法・ライティング",
+  science: "理科・科学",
+  social_studies: "社会・歴史・地理",
+  world_languages: "外国語",
   other: "その他",
 } as const;

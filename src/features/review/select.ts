@@ -38,6 +38,12 @@ export type ReviewQueueItem = {
   modelText?: string;
   correctAnswer: string;
   parentCoachingTip: string;
+  mediaExpired?: boolean;
+  createdAt?: string;
+  blankedPath?: string;
+  croppedPath?: string;
+  originalPath?: string;
+  localUri?: string;
   subject?: string;
   problemType?:
     | "calc_block"
@@ -55,7 +61,7 @@ export function todayIso(now?: Date): string {
 
 export function selectDailyReviews(
   items: ReviewQueueItem[],
-  options?: { min?: number; max?: number; today?: string },
+  options?: { min?: number; max?: number; today?: string; masteryByKey?: Record<string, { isMastered?: boolean; nextReviewDate?: string | null }> },
 ): {
   daily: ReviewQueueItem[];
   truncated: boolean;

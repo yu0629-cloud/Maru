@@ -42,9 +42,9 @@ function scanObjectEnd(text, start) {
   return -1;
 }
 
-/** MAX_TOKENS で途切れた problems 配列から、完成したオブジェクトだけ拾う */
+/** MAX_TOKENS で途切れた problems / questions 配列から、完成したオブジェクトだけ拾う */
 export function recoverTruncatedProblems(text) {
-  const match = String(text ?? "").match(/"problems"\s*:\s*\[/);
+  const match = String(text ?? "").match(/"(?:problems|questions)"\s*:\s*\[/);
   if (!match || match.index === undefined) return null;
   let i = match.index + match[0].length;
   const problems = [];

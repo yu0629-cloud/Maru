@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Image,
   Modal,
@@ -9,11 +9,11 @@ import {
   View,
   type LayoutChangeEvent,
 } from "react-native";
-import Svg, { Circle, Line } from "react-native-svg";
 import { ZoomableView } from "@/src/components/ZoomableView";
+import { CorrectMark, IncorrectMark, useGradeResultLabel, useResolvedMarkStyle } from "@/src/components/GradeMark";
+import { t, tMistake, useT } from "@/src/i18n";
 import {
   displayCoachingTip,
-  MISTAKE_LABELS,
   type GradedProblemView,
 } from "@/src/features/grading/corrections";
 import {
@@ -21,16 +21,15 @@ import {
   isGeminiBBox,
   layoutAlignedGradeMarks,
   mapGeminiBBoxToView,
-  MARK_STROKE_WIDTH,
 } from "@/src/features/grading/overlay-layout";
 
-const MARK_RED = "#E25C4A";
 const A4_ASPECT = 210 / 297;
 
 type OverlayProblem = Pick<
   GradedProblemView,
   | "id"
   | "problem_label"
+  | "question_text"
   | "is_correct"
   | "bbox"
   | "student_answer"
@@ -45,14 +44,20 @@ export function GradingPhotoOverlay({
   problems,
   onPressProblem,
   onGestureActive,
+  onUnavailable,
 }: {
   uri: string;
   problems: OverlayProblem[];
   onPressProblem: (problem: OverlayProblem) => void;
   onGestureActive?: (active: boolean) => void;
+  onUnavailable?: () => void;
 }) {
+  useT();
+  const markStyle = useResolvedMarkStyle();
   const [layout, setLayout] = useState({ width: 0, height: 0 });
   const [natural, setNatural] = useState<{ width: number; height: number } | null>(null);
+  const onUnavailableRef = useRef(onUnavailable);
+  onUnavailableRef.current = onUnavailable;
 
   useEffect(() => {
     let cancelled = false;
@@ -63,7 +68,10 @@ export function GradingPhotoOverlay({
         if (!cancelled && width > 0 && height > 0) setNatural({ width, height });
       },
       () => {
-        if (!cancelled) setNatural(null);
+        if (!cancelled) {
+          setNatural(null);
+          onUnavailableRef.current?.();
+        }
       },
     );
     return () => {
@@ -100,7 +108,12 @@ export function GradingPhotoOverlay({
     >
       <ZoomableView onInteractionChange={onGestureActive}>
         <View style={styles.layer} pointerEvents="box-none">
-          <Image source={{ uri }} style={StyleSheet.absoluteFill} resizeMode="contain" />
+          <Image
+            source={{ uri }}
+            style={StyleSheet.absoluteFill}
+            resizeMode="contain"
+            onError={() => onUnavailableRef.current?.()}
+          />
           {problems.map((problem, index) => {
             const mark = alignedMarks[index];
             if (!mark) return null;
@@ -108,7 +121,10 @@ export function GradingPhotoOverlay({
               <Pressable
                 key={problem.id}
                 accessibilityRole="button"
-                accessibilityLabel={`${problem.problem_label} ${problem.is_correct ? "正解" : "不正解"}`}
+                accessibilityLabel={t("scan.markA11y", {
+                  label: problem.problem_label,
+                  result: problem.is_correct ? t("scan.correctShort") : t("scan.incorrectShort"),
+                })}
                 hitSlop={6}
                 onPress={() => onPressProblem(problem)}
                 style={{
@@ -119,50 +135,13 @@ export function GradingPhotoOverlay({
                   height: mark.size,
                 }}
               >
-                {problem.is_correct ? <CorrectMark size={mark.size} /> : <IncorrectMark size={mark.size} />}
+                {problem.is_correct ? <CorrectMark size={mark.size} style={markStyle} /> : <IncorrectMark size={mark.size} />}
               </Pressable>
             );
           })}
         </View>
       </ZoomableView>
     </View>
-  );
-}
-
-function CorrectMark({ size }: { size: number }) {
-  const stroke = MARK_STROKE_WIDTH;
-  const r = Math.max(0, (size - stroke) / 2);
-  return (
-    <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-      <Circle cx={size / 2} cy={size / 2} r={r} stroke={MARK_RED} strokeWidth={stroke} fill="none" />
-    </Svg>
-  );
-}
-
-function IncorrectMark({ size }: { size: number }) {
-  const stroke = MARK_STROKE_WIDTH;
-  const inset = size * 0.22;
-  return (
-    <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-      <Line
-        x1={inset}
-        y1={inset}
-        x2={size - inset}
-        y2={size - inset}
-        stroke={MARK_RED}
-        strokeWidth={stroke}
-        strokeLinecap="round"
-      />
-      <Line
-        x1={size - inset}
-        y1={inset}
-        x2={inset}
-        y2={size - inset}
-        stroke={MARK_RED}
-        strokeWidth={stroke}
-        strokeLinecap="round"
-      />
-    </Svg>
   );
 }
 
@@ -175,42 +154,46 @@ export function ProblemDetailSheet({
   onClose: () => void;
   onToggle: () => void;
 }) {
+  const resultLabel = useGradeResultLabel(problem?.is_correct ?? false);
   if (!problem) return null;
   const coachingTip = displayCoachingTip(problem.is_correct, problem.parent_coaching_tip);
 
   return (
     <Modal visible animationType="slide" transparent onRequestClose={onClose}>
       <View className="flex-1 justify-end bg-black/40">
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="詳細を閉じる" />
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel={t("scan.closeDetail")} />
         <View className="rounded-t-3xl bg-cream px-5 pb-8 pt-4" style={{ zIndex: 1 }} pointerEvents="auto">
           <View className="mb-3 h-1 w-12 self-center rounded-full bg-ink/20" />
           <View className="flex-row items-center justify-between">
-            <Text className="text-lg font-bold text-ink">問 {problem.problem_label}</Text>
+            <Text className="text-lg font-bold text-ink">{t("common.question", { label: problem.problem_label })}</Text>
             <Pressable
               onPress={onToggle}
               className={`rounded-full px-3 py-1 ${problem.is_correct ? "bg-emerald-600" : "bg-maru-500"}`}
             >
-              <Text className="font-bold text-white">{problem.is_correct ? "〇 正解" : "✕ 不正解"}</Text>
+              <Text className="font-bold text-white">{resultLabel}</Text>
             </Pressable>
           </View>
           <Text className="mt-1 text-xs text-ink/60">
-            {problem.topic_tag}　／　{MISTAKE_LABELS[problem.mistake_type]}
+            {problem.topic_tag}　／　{tMistake(problem.mistake_type)}
           </Text>
-          <Text className="mt-1 text-xs text-ink/50">ピンチで拡大。マークまたはボタンで〇✕を修正できます</Text>
+          {problem.question_text ? (
+            <Text className="mt-2 text-base font-semibold text-ink">{problem.question_text}</Text>
+          ) : null}
+          <Text className="mt-1 text-xs text-ink/50">{t("scan.pinchSheetHint")}</Text>
           <ScrollView className="mt-3 max-h-64" keyboardShouldPersistTaps="handled">
-            <Text className="text-xs font-semibold text-ink/50">生徒の解答</Text>
-            <Text className="mt-1 text-sm text-ink">{problem.student_answer || "（なし）"}</Text>
-            <Text className="mt-3 text-xs font-semibold text-ink/50">解答</Text>
-            <Text className="mt-1 text-sm text-ink">{problem.correct_answer || "（なし）"}</Text>
+            <Text className="text-xs font-semibold text-ink/50">{t("scan.studentAnswerLabel")}</Text>
+            <Text className="mt-1 text-sm text-ink">{problem.student_answer || t("common.none")}</Text>
+            <Text className="mt-3 text-xs font-semibold text-ink/50">{t("scan.answerLabel")}</Text>
+            <Text className="mt-1 text-sm text-ink">{problem.correct_answer || t("common.none")}</Text>
             {coachingTip ? (
               <>
-                <Text className="mt-3 text-xs font-semibold text-ink/50">アドバイス</Text>
+                <Text className="mt-3 text-xs font-semibold text-ink/50">{t("scan.advice")}</Text>
                 <Text className="mt-1 text-sm leading-5 text-ink/80">{coachingTip}</Text>
               </>
             ) : null}
           </ScrollView>
           <Pressable className="mt-5 rounded-xl bg-ink py-3" onPress={onClose}>
-            <Text className="text-center font-semibold text-white">閉じる</Text>
+            <Text className="text-center font-semibold text-white">{t("common.close")}</Text>
           </Pressable>
         </View>
       </View>

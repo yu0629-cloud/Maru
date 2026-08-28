@@ -20,6 +20,7 @@ function fromPrint(index: number, extra: Partial<ReviewQueueItem> = {}): ReviewQ
     imageSrc: problem.imageSrc ?? "",
     bbox: problem.bbox,
     isCorrect: problem.isCorrect ?? false,
+    questionText: problem.questionText,
     prompt: problem.prompt,
     expressions: problem.expressions,
     modelText: problem.modelText,

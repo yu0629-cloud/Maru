@@ -1,4 +1,4 @@
-import { hasSupabaseConfig, isMockMode } from "@/src/lib/env";
+import { hasSupabaseConfig } from "@/src/lib/env";
 import { useAuthStore } from "@/src/stores/authStore";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -8,11 +8,11 @@ export function isUuid(value?: string | null): value is string {
 }
 
 /**
- * 本物の Supabase へ問い合わせてよいか。
+ * 本物の Supabase / Gemini へ問い合わせてよいか。
+ * EXPO_PUBLIC_USE_MOCKS は課金モック専用なので、ここでは見ない。
  * 開発用モックログイン（userId が mock-parent-1 など）では false。
  */
 export function shouldUseRemote(id?: string | null) {
-  if (isMockMode()) return false;
   const auth = useAuthStore.getState();
   if (auth.mocked) return false;
   if (auth.userId && !isUuid(auth.userId)) return false;

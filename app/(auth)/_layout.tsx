@@ -1,9 +1,12 @@
 import { useAuth } from "@/src/hooks/useAuth";
 import { Redirect, Stack } from "expo-router";
+import { href } from "@/src/lib/nav/href";
 import { ActivityIndicator, View } from "react-native";
+import { usePrefsStore } from "@/src/stores/prefsStore";
 
 export default function AuthLayout() {
   const { ready, signedIn } = useAuth();
+  const onboardingDone = usePrefsStore((state) => state.onboardingDone);
 
   if (!ready) {
     return (
@@ -13,9 +16,22 @@ export default function AuthLayout() {
     );
   }
 
-  if (signedIn) {
-    return <Redirect href="/(app)" />;
+  if (!onboardingDone) {
+    return <Redirect href={href("/onboarding")} />;
   }
 
-  return <Stack screenOptions={{ headerShown: false }} />;
+  if (signedIn) {
+    return <Redirect href={href("/(app)")} />;
+  }
+
+  return (
+    <Stack
+      screenOptions={{
+        headerShown: false,
+        gestureEnabled: true,
+        fullScreenGestureEnabled: false,
+        animation: "none",
+      }}
+    />
+  );
 }

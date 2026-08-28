@@ -3,7 +3,7 @@ import * as Linking from "expo-linking";
 import * as WebBrowser from "expo-web-browser";
 import { Platform } from "react-native";
 import { mapAuthError } from "@/src/features/auth/errors";
-import { isMockMode, oauthRedirectUrl } from "@/src/lib/env";
+import { shouldMockAuth, oauthRedirectUrl } from "@/src/lib/env";
 import { shouldUseRemote } from "@/src/lib/backend";
 import { supabase } from "@/src/lib/supabase/client";
 import { setMemoryAccessToken } from "@/src/lib/supabase/access-token";
@@ -92,7 +92,7 @@ export async function createSessionFromUrl(url: string) {
 }
 
 export async function signInWithEmail(email: string, password: string) {
-  if (isMockMode()) {
+  if (shouldMockAuth()) {
     return signInMock({ email, displayName: email.split("@")[0] ?? "保護者" });
   }
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
@@ -101,7 +101,7 @@ export async function signInWithEmail(email: string, password: string) {
 }
 
 export async function signUpWithEmail(email: string, password: string, displayName: string) {
-  if (isMockMode()) {
+  if (shouldMockAuth()) {
     return signInMock({ email, displayName: displayName || email.split("@")[0] || "保護者" });
   }
   const { data, error } = await supabase.auth.signUp({
@@ -114,14 +114,14 @@ export async function signUpWithEmail(email: string, password: string, displayNa
 }
 
 export async function signInAnonymously() {
-  if (isMockMode()) return signInAnonymouslyMock();
+  if (shouldMockAuth()) return signInAnonymouslyMock();
   const { data, error } = await supabase.auth.signInAnonymously();
   if (error) throw mapAuthError(error);
   return data.session;
 }
 
 export async function signInWithGoogle() {
-  if (isMockMode()) {
+  if (shouldMockAuth()) {
     return signInMock({ email: "google@maru.local", displayName: "Googleユーザー" });
   }
   const redirectTo = oauthRedirectUrl();
@@ -142,7 +142,7 @@ export async function signInWithApple() {
   if (Platform.OS !== "ios") {
     throw new Error("Apple でサインインは iOS のみ対応しています");
   }
-  if (isMockMode()) {
+  if (shouldMockAuth()) {
     return signInMock({ email: "apple@maru.local", displayName: "Appleユーザー" });
   }
   const AppleAuthentication = await import("expo-apple-authentication");
@@ -196,7 +196,7 @@ export async function signOut() {
 }
 
 export async function restoreLocalAuth() {
-  if (isMockMode()) {
+  if (shouldMockAuth()) {
     const session = await loadMockSession();
     if (session) applyLocalSession(session, true);
     else useAuthStore.getState().setReady(true);

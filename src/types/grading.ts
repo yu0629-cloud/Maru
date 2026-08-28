@@ -1,6 +1,6 @@
-import type { DifficultyLevel, MistakeType, ProblemType } from "./database";
+import type { DifficultyLevel, MistakeType, ProblemType, SubjectCode } from "./database";
 
-export type { DifficultyLevel, MistakeType, ProblemType };
+export type { DifficultyLevel, MistakeType, ProblemType, SubjectCode };
 export type GeminiBBox = [ymin: number, xmin: number, ymax: number, xmax: number];
 
 export type OverallScore = {
@@ -10,6 +10,7 @@ export type OverallScore = {
 
 export type GradeProblem = {
   problem_index: string;
+  question_text: string;
   bbox: GeminiBBox;
   is_correct: boolean;
   student_answer: string;
@@ -23,6 +24,7 @@ export type GradeProblem = {
 };
 
 export type GradeResult = {
+  subject?: SubjectCode;
   overall_score: OverallScore;
   problems: GradeProblem[];
 };

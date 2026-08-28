@@ -18,6 +18,8 @@ const {
   describeQuota,
   offeringsForPaywall,
   previewQuotaState,
+  quotaExhaustedMessage,
+  PAYWALL_FREE_CARRYOVER_MESSAGE,
   tierFromEntitlementIds,
 } = await import(pathToFileURL(join(root, "src/features/billing/lib/catalog.mjs")).href);
 
@@ -82,6 +84,14 @@ assert.equal(describeQuota(paidPreview).canBuyTickets, true);
 assert.equal(describeQuota(previewQuotaState("family")).remaining, 400);
 pass("テスト切替は無料10枚・有料は月次クォータになる");
 
+assert.equal(
+  quotaExhaustedMessage("free"),
+  PAYWALL_FREE_CARRYOVER_MESSAGE,
+);
+assert.match(PAYWALL_FREE_CARRYOVER_MESSAGE, /採点データと画像をそのまま引き継いで/);
+assert.match(quotaExhaustedMessage("family"), /追加チケット/);
+pass("無料枠切れの Paywall はデータ引き継ぎを案内する");
+
 const now = "2026-08-24T01:00:00.000Z";
 const later = "2026-08-24T02:00:00.000Z";
 const newest = "2026-08-24T03:00:00.000Z";
@@ -124,5 +134,21 @@ const refresh = registerDeviceSession(third.sessions, {
 assert.equal(refresh.status, "refreshed");
 assert.equal(refresh.evicted, null);
 pass("同一端末の再ログインはセッション更新のみ");
+
+const { readFileSync } = await import("node:fs");
+const settingsSrc = readFileSync(join(root, "app/(app)/(tabs)/settings/index.tsx"), "utf8");
+assert.match(settingsSrc, /DebugResetScanQuotaButton/);
+const debugBtnSrc = readFileSync(join(root, "src/components/DebugResetScanQuotaButton.tsx"), "utf8");
+assert.match(debugBtnSrc, /canPreviewPlans/);
+assert.match(debugBtnSrc, /スキャン回数をリセットしました（残り10枚）/);
+assert.match(debugBtnSrc, /【Debug】スキャン回数をリセット（0枚に戻す）/);
+const resetSrc = readFileSync(join(root, "src/features/billing/reset-free-scans.ts"), "utf8");
+assert.match(resetSrc, /free_scans_remaining/);
+assert.match(resetSrc, /FREE_SCAN_GRANT/);
+assert.match(resetSrc, /resetFreeScansForDebug/);
+const quotaStoreSrc = readFileSync(join(root, "src/stores/quotaStore.ts"), "utf8");
+assert.match(quotaStoreSrc, /resetFreeScansForDebug/);
+assert.match(quotaStoreSrc, /FREE_SCAN_GRANT/);
+pass("設定の Debug リセットは開発時のみ表示し、無料枠を10枚に戻す");
 
 console.log("\nAll account / billing / session checks passed.");

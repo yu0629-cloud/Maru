@@ -1,4 +1,5 @@
-import { cropAspect, resolveCropBox } from "./bbox.mjs";
+import { cropAspect, resolveCropBox, expandPrintCropBox, answerMaskBox } from "./bbox.mjs";
+import { isIncorrectForPrint } from "./from-reviews.mjs";
 
 export const PAGE_BODY_MM = 248;
 export const DEFAULT_ANSWER_MASK = { x: 0, y: 0.45, width: 1, height: 0.55 };
@@ -11,7 +12,7 @@ const WIDE_TYPES = new Set([
 ]);
 
 export function isIncorrectPrintProblem(problem) {
-  return problem?.isCorrect !== true && problem?.is_correct !== true;
+  return isIncorrectForPrint(problem);
 }
 
 export function layoutKind(problem, cropBox = resolveCropBox(problem)) {
@@ -26,29 +27,36 @@ export function layoutKind(problem, cropBox = resolveCropBox(problem)) {
 export function toClipItems(problems) {
   const items = [];
   for (const problem of problems ?? []) {
-    if (!isIncorrectPrintProblem(problem)) continue;
-    const cropBox = resolveCropBox(problem);
+    if (!isIncorrectForPrint(problem)) continue;
+    const originalBox = resolveCropBox(problem);
+    const cropBox = problem.printCropped ? originalBox : expandPrintCropBox(originalBox);
     const imageSrc =
       problem.blankedImageSrc ||
       problem.croppedImageSrc ||
       problem.imageSrc ||
       problem.originalImageSrc ||
       "";
+    const rawLabel = String(problem.label ?? problem.problemIndex ?? "").trim();
+    const label = /^\d+$/.test(rawLabel) ? `問${rawLabel}` : rawLabel;
     items.push({
       id: String(problem.id ?? items.length + 1),
       number: items.length + 1,
       layout: layoutKind(problem, cropBox),
       cropBox,
+      mask: answerMaskBox(originalBox, cropBox),
       imageSrc,
       originalImageSrc: problem.originalImageSrc || "",
       isBlanked: Boolean(problem.isBlanked || problem.blankedImageSrc),
-      cropMode: problem.blankedImageSrc || problem.croppedImageSrc || (problem.imageSrc && !problem.originalImageSrc)
+      cropMode: problem.printCropped || problem.blankedImageSrc || problem.croppedImageSrc || (problem.imageSrc && !problem.originalImageSrc)
         ? "image"
         : problem.originalImageSrc
           ? "css-crop"
-          : "facsimile",
+          : "text",
       problemType: problem.problemType ?? problem.problem_type,
-      label: problem.label ?? "",
+      label,
+      questionText: problem.questionText || problem.prompt || label || "",
+      correctAnswer: problem.correctAnswer || problem.correct_answer || "",
+      mediaExpired: Boolean(problem.mediaExpired),
     });
   }
   return items;
@@ -82,7 +90,7 @@ export function estimateRowHeightMm(row) {
   const cap = row.length === 2 ? 72 : 128;
   const heights = row.map((item) => {
     const ar = cropAspect(item.cropBox);
-    return Math.min(cap, Math.max(32, colWidth / ar));
+    return Math.min(cap, Math.max(44, colWidth / ar));
   });
   return Math.max(...heights) + 8;
 }

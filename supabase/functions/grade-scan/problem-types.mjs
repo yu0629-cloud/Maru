@@ -18,27 +18,39 @@ export const PROBLEM_TYPE_LABELS = {
   standard: "文章題",
 };
 
-const CALC_HINTS = /計算ドリル|一行計算|九九|かけ算|わり算|たし算|ひき算|繰り上|繰り下|暗算|筆算/;
+const CALC_HINTS = /計算ドリル|一行計算|九九|かけ算|わり算|たし算|ひき算|繰り上|繰り下|暗算|筆算|arithmetic|multiplication|division/;
 const GEOMETRY_HINTS = /作図|グラフ書き|展開図|立体|コンパス|定規|方眼に|円の|角度|体積|面積図|切断/;
 const KANJI_HINTS = /漢字|部首|とめ|はね|はらい|語句|送り仮名|書き取り/;
-const READING_HINTS = /読解|長文|記述|選択問題|傍線部|本文/;
-const DIAGRAM_HINTS = /理科|社会|地図|実験|器具|回路|星座|歴史|地理|公民|天気/;
+const READING_HINTS = /読解|長文|記述|選択問題|傍線部|本文|reading comprehension|main idea|read the (text|passage)/i;
+const DIAGRAM_HINTS = /理科|社会|地図|実験|器具|回路|星座|歴史|地理|公民|天気|science|stem|social studies|history|geography|civics/i;
 const ESSAY_HINTS = /適性検査|作文|資料読み|200字|400字|公立中高一貫|論述|意見文/;
+const SPELLING_HINTS = /スペル|フォニックス|語彙|英単語|アルファベット|spelling|phonics|vocabulary|sight ?words?|word family|cvc|blend|digraph/i;
+const WRITING_HINTS = /文法|ライティング|punctuation|grammar|writing prompt/i;
+const WORLD_LANG_HINTS = /外国語|スペイン語|spanish|french|german|world language/i;
+const SOCIAL_HINTS = /社会|歴史|地理|公民|地図|social studies|history|geography|civics/i;
+const SCIENCE_HINTS = /理科|実験|植物|天気|science|stem/i;
+const JAPANESE_HINTS = /国語|漢字|ひらがな|カタカナ|傍線/;
+const MATH_HINTS = /算|数|図形|立体|分数|math|arithmetic/i;
 
 export function isProblemType(value) {
   return typeof value === "string" && PROBLEM_TYPES.includes(value);
 }
 
 export function inferProblemType(input) {
-  const hay = `${input.topicTag ?? ""} ${input.subject ?? ""} ${input.problemIndex ?? ""} ${input.studentAnswer ?? ""} ${input.correctAnswer ?? ""}`;
+  const hay = `${input.topicTag ?? ""} ${input.subject ?? ""} ${input.problemIndex ?? ""} ${input.questionText ?? ""} ${input.studentAnswer ?? ""} ${input.correctAnswer ?? ""}`;
 
   if (ESSAY_HINTS.test(hay)) return "integrated_essay";
   if (KANJI_HINTS.test(hay) || (input.subject === "japanese" && /漢字|語句/.test(hay))) return "kanji";
-  if (READING_HINTS.test(hay) && (input.subject === "japanese" || /国語|読解/.test(hay))) {
+  if (READING_HINTS.test(hay) && (input.subject === "japanese" || input.subject === "reading" || /国語|読解/.test(hay))) {
     return "reading_passage";
   }
   if (GEOMETRY_HINTS.test(hay)) return "math_geometry_graph";
-  if (DIAGRAM_HINTS.test(hay) || input.subject === "science" || input.subject === "social") {
+  if (
+    DIAGRAM_HINTS.test(hay) ||
+    input.subject === "science" ||
+    input.subject === "social" ||
+    input.subject === "social_studies"
+  ) {
     return "science_social_diagram";
   }
   if (CALC_HINTS.test(hay)) return "calc_block";
@@ -48,18 +60,27 @@ export function inferProblemType(input) {
 }
 
 export function inferSubjectFromProblemType(type, topicTag = "") {
-  if (type === "kanji" || type === "reading_passage") return "japanese";
+  const hay = String(topicTag ?? "");
+  if (SPELLING_HINTS.test(hay)) return "spelling_phonics";
+  if (WRITING_HINTS.test(hay) && !JAPANESE_HINTS.test(hay)) return "writing_grammar";
+  if (WORLD_LANG_HINTS.test(hay) || /英語/.test(hay)) return "world_languages";
+  if (type === "kanji") return "japanese";
+  if (type === "reading_passage") {
+    if (JAPANESE_HINTS.test(hay) || /読解/.test(hay)) return "japanese";
+    if (/reading|comprehension|passage/i.test(hay)) return "reading";
+    return "japanese";
+  }
   if (type === "calc_block" || type === "math_geometry_graph") return "math";
   if (type === "integrated_essay") return "other";
   if (type === "science_social_diagram") {
-    if (/社会|歴史|地理|公民|地図/.test(topicTag)) return "social";
+    if (SOCIAL_HINTS.test(hay)) return "social_studies";
     return "science";
   }
-  if (/英語|英単/.test(topicTag)) return "english";
-  if (/社会|歴史|地理/.test(topicTag)) return "social";
-  if (/理科|実験|植物/.test(topicTag)) return "science";
-  if (/漢字|読解|国語/.test(topicTag)) return "japanese";
-  if (/算|数|図形|立体|分数/.test(topicTag)) return "math";
+  if (/reading comprehension|main idea|read the (text|passage)/i.test(hay)) return "reading";
+  if (SOCIAL_HINTS.test(hay)) return "social_studies";
+  if (SCIENCE_HINTS.test(hay)) return "science";
+  if (JAPANESE_HINTS.test(hay) || /読解/.test(hay)) return "japanese";
+  if (MATH_HINTS.test(hay)) return "math";
   return "other";
 }
 

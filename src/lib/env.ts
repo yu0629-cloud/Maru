@@ -5,9 +5,19 @@ export function hasSupabaseConfig() {
   return Boolean(process.env.EXPO_PUBLIC_SUPABASE_URL && process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY);
 }
 
+/** EXPO_PUBLIC_USE_MOCKS。課金（RevenueCat）だけモックし、採点には使わない */
 export function isMockMode() {
   const flag = String(process.env.EXPO_PUBLIC_USE_MOCKS ?? "").trim().toLowerCase();
   if (flag === "1" || flag === "true" || flag === "yes") return true;
+  return !hasSupabaseConfig();
+}
+
+export function isBillingMocked() {
+  return isMockMode();
+}
+
+/** Supabase 未設定のときだけ認証・子どもデータをローカルモックにする */
+export function shouldMockAuth() {
   return !hasSupabaseConfig();
 }
 

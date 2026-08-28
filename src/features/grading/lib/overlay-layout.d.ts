@@ -45,6 +45,7 @@ export const PHOTO_Y_MAX_RATIO: number;
 export const PHOTO_Y_MIN_RATIO: number;
 export const PHOTO_X_MARGIN_RATIO: number;
 export function isBlankStudentAnswer(value: unknown): boolean;
+export function isAnswerSlotBox(box: LayoutRect, typicalW?: number): boolean;
 export function estimatePrintedRowHeight(boxes: LayoutRect[]): number;
 export function clusterOverlayColumns<T extends { box: LayoutRect }>(
   items: Array<T | null | undefined>,

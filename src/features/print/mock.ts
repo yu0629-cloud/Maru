@@ -6,7 +6,17 @@ export const MOCK_CHILD = {
   name: "はると",
   grade_code: "e4" as const,
   exam_target: "中学受験",
-  target_subjects: ["math", "japanese"] as Array<"math" | "japanese" | "science" | "social" | "english" | "other">,
+  target_subjects: ["math", "japanese"] as Array<
+    | "math"
+    | "japanese"
+    | "spelling_phonics"
+    | "reading"
+    | "writing_grammar"
+    | "science"
+    | "social_studies"
+    | "world_languages"
+    | "other"
+  >,
   avatar_hue: 12,
   sort_order: 0,
   created_at: "2026-08-01T00:00:00.000Z",
@@ -22,6 +32,7 @@ export const MOCK_PRINT_PROBLEMS: PrintProblem[] = [
     problemType: "calc_block",
     bbox: [80, 60, 260, 940],
     isCorrect: false,
+    questionText: "5 + 4 =",
     studentAnswer: "43",
     correctAnswer: "(1) 34 (2) 63 (3) 72 (4) 9",
     parentCoachingTip: "位がずれています。「位を揃えて、もう一回ゆっくり書いてみよう」",
@@ -34,6 +45,7 @@ export const MOCK_PRINT_PROBLEMS: PrintProblem[] = [
     problemType: "math_geometry_graph",
     bbox: [830, 60, 980, 940],
     isCorrect: false,
+    questionText: "立体を切った切り口はどんな形になりますか。",
     studentAnswer: "",
     correctAnswer: "正六角形になる場合を確認。",
     parentCoachingTip: "式の前に図が空です。「式はあとでいいよ。まず問題の条件を図に書き込んでみよう」",
@@ -46,6 +58,7 @@ export const MOCK_PRINT_PROBLEMS: PrintProblem[] = [
     problemType: "standard",
     bbox: [480, 60, 820, 940],
     isCorrect: false,
+    questionText: "つるとかめが合わせて10ひきいます。足は全部で34本です。",
     studentAnswer: "つる4ひき、かめ6ひき",
     correctAnswer: "つる3ひき、かめ7ひき。",
     parentCoachingTip: "全部かめにしたら足は何本？ そこから一緒に戻そう。",
@@ -58,6 +71,7 @@ export const MOCK_PRINT_PROBLEMS: PrintProblem[] = [
     problemType: "kanji",
     bbox: [100, 40, 220, 480],
     isCorrect: false,
+    questionText: "「ちゅうい」の「ちゅう」を漢字で書きなさい。",
     studentAnswer: "注",
     correctAnswer: "注（さんずい＋主）",
     parentCoachingTip: "へんとつくりの幅が偏っています。",
@@ -70,6 +84,7 @@ export const MOCK_PRINT_PROBLEMS: PrintProblem[] = [
     problemType: "reading_passage",
     bbox: [200, 50, 780, 950],
     isCorrect: false,
+    questionText: "川の水かさが増えた理由を書きなさい。",
     studentAnswer: "川が増えた",
     correctAnswer: "雨が続いたから、川の水かさが増えたから。",
     parentCoachingTip: "理由の接続が見えません。",

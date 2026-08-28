@@ -1,6 +1,7 @@
 import { Pressable, Text, View } from "react-native";
-import { router } from "expo-router";
+import { push } from "@/src/lib/nav/href";
 import { useCurrentChild } from "@/src/hooks/useCurrentChild";
+import { t } from "@/src/i18n";
 
 export function ChildSwitcher() {
   const { children, currentChildId, switchChild } = useCurrentChild();
@@ -23,8 +24,8 @@ export function ChildSwitcher() {
           </Pressable>
         );
       })}
-      <Pressable className="rounded-full bg-white px-3 py-2" onPress={() => router.push("/(app)/children")}>
-        <Text className="text-ink/70">{children.length === 0 ? "子どもを登録" : "管理"}</Text>
+      <Pressable className="rounded-full bg-white px-3 py-2" onPress={() => push("/(app)/children")}>
+        <Text className="text-ink/70">{children.length === 0 ? t("child.register") : t("child.manage")}</Text>
       </Pressable>
     </View>
   );

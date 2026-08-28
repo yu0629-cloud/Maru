@@ -19,6 +19,8 @@ export {
   gradeText,
   templateTip,
   parseExtractProblems,
+  extractProblemList,
+  isQuestionNumberOnly,
   gradeExtractedProblems,
   gradeFromGeminiPayload,
 } from "./hybrid-grade.mjs";
@@ -31,6 +33,7 @@ export type ExtractedProblem = {
   student_answer: string;
   correct_answer: string;
   type: GradeKind;
+  topic?: string;
   bbox?: [number, number, number, number] | null;
   gemini_is_correct?: boolean;
 };

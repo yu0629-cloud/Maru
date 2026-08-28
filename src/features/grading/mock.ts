@@ -1,12 +1,15 @@
 import { MOCK_PRINT_PROBLEMS } from "@/src/features/print/mock";
 import type { GradedProblemView } from "@/src/features/grading/corrections";
 import type { GradeResult } from "@/src/types/grading";
+import type { TriageLevel } from "@/src/types/database";
 
 export const MOCK_GRADE_RESULT: GradeResult = {
+  subject: "math",
   overall_score: { earned: 7, max: 10 },
   problems: [
     {
       problem_index: "大問1 (1)",
+      question_text: "8 × 9 =",
       bbox: [80, 60, 260, 940],
       is_correct: true,
       student_answer: "72",
@@ -20,6 +23,7 @@ export const MOCK_GRADE_RESULT: GradeResult = {
     },
     {
       problem_index: "大問1 (2)",
+      question_text: "52 - 18 =",
       bbox: [270, 60, 460, 940],
       is_correct: false,
       student_answer: "43",
@@ -34,6 +38,7 @@ export const MOCK_GRADE_RESULT: GradeResult = {
     },
     {
       problem_index: "大問2",
+      question_text: "つるとかめが合わせて10ひき、足の数が34本。それぞれ何ひき？",
       bbox: [480, 60, 820, 940],
       is_correct: false,
       student_answer: "つる4ひき、かめ6ひき",
@@ -47,6 +52,7 @@ export const MOCK_GRADE_RESULT: GradeResult = {
     },
     {
       problem_index: "大問3",
+      question_text: "立方体を切った切り口の形は？",
       bbox: [830, 60, 980, 940],
       is_correct: false,
       student_answer: "",
@@ -73,6 +79,7 @@ export function gradeResultToView(result: GradeResult, scanId: string): GradedPr
     id: `${scanId}-p${index + 1}`,
     problem_index: index + 1,
     problem_label: problem.problem_index,
+    question_text: problem.question_text ?? "",
     is_correct: problem.is_correct,
     mistake_type: problem.mistake_type,
     parent_coaching_tip: problem.parent_coaching_tip,
@@ -86,19 +93,52 @@ export function gradeResultToView(result: GradeResult, scanId: string): GradedPr
   }));
 }
 
-export const MOCK_CARTE = {
+export type CarteUnitStat = {
+  unit: string;
+  rate: number;
+  total?: number;
+  correct?: number;
+  subject?: string | null;
+};
+
+export type CarteView = {
+  foundation_rate: number;
+  scan_count: number;
+  problem_count: number;
+  triage_level: TriageLevel;
+  summary: string;
+  weak_units: Array<CarteUnitStat & { total: number; correct: number }>;
+  strong_units: CarteUnitStat[];
+  careless_rate: number;
+  recent_rates: number[];
+};
+
+export const EMPTY_CARTE: CarteView = {
+  foundation_rate: 0,
+  scan_count: 0,
+  problem_count: 0,
+  triage_level: "watch",
+  summary: "",
+  weak_units: [],
+  strong_units: [],
+  careless_rate: 0,
+  recent_rates: [],
+};
+
+export const MOCK_CARTE: CarteView = {
+  ...EMPTY_CARTE,
   foundation_rate: 0.62,
   scan_count: 8,
   problem_count: 40,
-  triage_level: "needs_review" as const,
+  triage_level: "needs_review",
   summary: "定着が不安定な単元がある。1日3〜5問の復習枠を守る。",
   weak_units: [
-    { unit: "つるかめ算", rate: 0.25, total: 8, correct: 2 },
-    { unit: "繰り下がり", rate: 0.44, total: 9, correct: 4 },
+    { unit: "つるかめ算", rate: 0.25, total: 8, correct: 2, subject: "math" as const },
+    { unit: "繰り下がり", rate: 0.44, total: 9, correct: 4, subject: "math" as const },
   ],
   strong_units: [
-    { unit: "かけ算", rate: 0.9, total: 10, correct: 9 },
-    { unit: "小数", rate: 0.8, total: 5, correct: 4 },
+    { unit: "かけ算", rate: 0.9, total: 10, correct: 9, subject: "math" as const },
+    { unit: "小数", rate: 0.8, total: 5, correct: 4, subject: "math" as const },
   ],
   careless_rate: 0.18,
   recent_rates: [0.5, 0.55, 0.6, 0.58, 0.62],

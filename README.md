@@ -73,7 +73,7 @@ npx expo start --dev-client
 
 1. `.env` から `EXPO_PUBLIC_USE_MOCKS` を外し、Supabase URL / anon key、RevenueCat の Apple/Google API キーを入れる。
 2. `npx supabase db reset`（または本番に最新 migration まで適用）。
-3. Edge Functions をデプロイ: `grade-scan`、`inpaint-handwriting`、`sync-revenuecat`、`delete-account`。
+3. Edge Functions をデプロイ: `grade-scan`、`inpaint-handwriting`、`sync-revenuecat`、`delete-account`、`purge-expired-media`。
 4. RevenueCat ダッシュボード:
    - Entitlement `standard` / `family`
    - 商品 ID: `maru_standard_monthly` `maru_standard_yearly` `maru_family_monthly` `maru_family_yearly` `scan_ticket_50` `scan_ticket_100`

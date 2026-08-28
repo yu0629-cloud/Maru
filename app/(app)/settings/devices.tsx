@@ -8,8 +8,11 @@ import {
   simulateThirdDeviceLogin,
 } from "@/src/features/session/service";
 import { useDeviceStore } from "@/src/stores/deviceStore";
+import { useAppLocale, useT } from "@/src/i18n";
 
 export default function DevicesScreen() {
+  const t = useT();
+  const locale = useAppLocale();
   const sessions = useDeviceStore((state) => state.sessions);
   const [busy, setBusy] = useState(false);
 
@@ -18,45 +21,44 @@ export default function DevicesScreen() {
   }, []);
 
   function confirmRevoke(deviceId: string, name: string | null, isCurrent: boolean) {
-    Alert.alert(
-      isCurrent ? "この端末からログアウトします" : "端末を解除します",
-      name ?? deviceId,
-      [
-        { text: "キャンセル", style: "cancel" },
-        {
-          text: "解除",
-          style: "destructive",
-          onPress: () => {
-            setBusy(true);
-            void revokeDevice(deviceId)
-              .catch((error) => Alert.alert("解除できません", error instanceof Error ? error.message : ""))
-              .finally(() => setBusy(false));
-          },
+    Alert.alert(isCurrent ? t("devices.logoutThis") : t("devices.revokeDevice"), name ?? deviceId, [
+      { text: t("common.cancel"), style: "cancel" },
+      {
+        text: t("devices.revoke"),
+        style: "destructive",
+        onPress: () => {
+          setBusy(true);
+          void revokeDevice(deviceId)
+            .catch((error) => Alert.alert(t("devices.cannotRevoke"), error instanceof Error ? error.message : ""))
+            .finally(() => setBusy(false));
         },
-      ],
-    );
+      },
+    ]);
   }
 
   return (
     <ScrollView className="flex-1 bg-cream px-5 pt-5">
-      <Text className="text-2xl font-bold text-ink">ログイン端末</Text>
-      <Text className="mt-2 text-ink/70">同時ログインは最大2台です。3台目で入ると、使っていない端末が自動で外れます。</Text>
+      <Text className="text-2xl font-bold text-ink">{t("devices.title")}</Text>
+      <Text className="mt-2 text-ink/70">{t("devices.subtitle")}</Text>
 
       {sessions.map((session) => (
         <View key={session.device_id} className="mt-3 rounded-2xl bg-white px-4 py-4">
           <Text className="font-bold text-ink">
             {session.device_name ?? session.device_id}
-            {session.isCurrent ? "（この端末）" : ""}
+            {session.isCurrent ? t("devices.thisDevice") : ""}
           </Text>
           <Text className="mt-1 text-xs text-ink/50">
-            {session.platform} · 最終 {new Date(session.last_seen_at).toLocaleString("ja-JP")}
+            {t("devices.lastSeen", {
+              platform: session.platform,
+              time: new Date(session.last_seen_at).toLocaleString(locale === "ja" ? "ja-JP" : "en-US"),
+            })}
           </Text>
           <Pressable
             className="mt-3 self-start rounded-full bg-cream px-3 py-1"
             disabled={busy}
             onPress={() => confirmRevoke(session.device_id, session.device_name, session.isCurrent)}
           >
-            <Text className="text-sm text-maru-600">解除</Text>
+            <Text className="text-sm text-maru-600">{t("devices.revoke")}</Text>
           </Pressable>
         </View>
       ))}
@@ -68,13 +70,13 @@ export default function DevicesScreen() {
             onPress={() => {
               void simulateThirdDeviceLogin().then((stillHere) => {
                 if (stillHere) {
-                  Alert.alert("3台目を追加しました", "この端末は残っています。最古の擬似端末が外れました。");
+                  Alert.alert(t("devices.simThirdDone"), t("devices.simThirdBody"));
                 }
               });
             }}
           >
-            <Text className="text-center font-bold text-ink">3台目ログインをシミュレート</Text>
-            <Text className="mt-1 text-center text-xs text-ink/60">最古の端末が失効します（この端末は残る）</Text>
+            <Text className="text-center font-bold text-ink">{t("devices.simThird")}</Text>
+            <Text className="mt-1 text-center text-xs text-ink/60">{t("devices.simThirdHint")}</Text>
           </Pressable>
           <Pressable
             className="mt-3 mb-10 rounded-2xl bg-white px-4 py-4"
@@ -82,8 +84,8 @@ export default function DevicesScreen() {
               void simulateKickThisDevice();
             }}
           >
-            <Text className="text-center font-bold text-maru-600">この端末の失効をシミュレート</Text>
-            <Text className="mt-1 text-center text-xs text-ink/60">アラートのあと自動ログアウトします</Text>
+            <Text className="text-center font-bold text-maru-600">{t("devices.simKick")}</Text>
+            <Text className="mt-1 text-center text-xs text-ink/60">{t("devices.simKickHint")}</Text>
           </Pressable>
         </>
       ) : null}

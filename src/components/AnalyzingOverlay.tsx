@@ -1,9 +1,10 @@
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
+import { t } from "@/src/i18n";
 
 export function AnalyzingOverlay({
   visible,
-  label = "まるつけしています…",
-  detail = "問題枠の抽出とつまずき分析を実行中",
+  label,
+  detail,
 }: {
   visible: boolean;
   label?: string;
@@ -11,10 +12,10 @@ export function AnalyzingOverlay({
 }) {
   if (!visible) return null;
   return (
-    <View pointerEvents="auto" style={[StyleSheet.absoluteFill, { zIndex: 40, elevation: 40 }]} className="items-center justify-center bg-black/70">
+    <View pointerEvents={visible ? "auto" : "none"} style={[StyleSheet.absoluteFill, { zIndex: 20, elevation: 20 }]} className="items-center justify-center bg-black/70">
       <ActivityIndicator size="large" color="#fff" />
-      <Text className="mt-4 text-base font-semibold text-white">{label}</Text>
-      <Text className="mt-1 px-8 text-center text-xs text-white/70">{detail}</Text>
+      <Text className="mt-4 text-base font-semibold text-white">{label ?? t("camera.overlayLabel")}</Text>
+      <Text className="mt-1 px-8 text-center text-xs text-white/70">{detail ?? t("camera.overlayDetail")}</Text>
     </View>
   );
 }

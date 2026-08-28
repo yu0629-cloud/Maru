@@ -1,20 +1,20 @@
 import { useAuth } from "@/src/hooks/useAuth";
-import { Redirect, Tabs } from "expo-router";
+import { Redirect, Stack } from "expo-router";
+import { href } from "@/src/lib/nav/href";
 import { ActivityIndicator, View } from "react-native";
 import { AccountRuntime } from "@/src/features/session/AccountRuntime";
-import { TabBarIcon, type TabBarIconName } from "@/src/components/TabBarIcon";
 import { ScreenBackButton } from "@/src/components/ScreenBackButton";
+import { useT } from "@/src/i18n";
+import { usePrefsStore } from "@/src/stores/prefsStore";
 
-const TAB_ICONS: Record<string, TabBarIconName> = {
-  index: "home",
-  "camera/index": "camera",
-  "review/index": "review",
-  "carte/index": "carte",
-  "settings/index": "settings",
+export const unstable_settings = {
+  initialRouteName: "(tabs)",
 };
 
 export default function AppLayout() {
   const { ready, signedIn } = useAuth();
+  const t = useT();
+  const onboardingDone = usePrefsStore((state) => state.onboardingDone);
 
   if (!ready) {
     return (
@@ -24,55 +24,110 @@ export default function AppLayout() {
     );
   }
 
+  if (!onboardingDone) {
+    return <Redirect href={href("/onboarding")} />;
+  }
+
   if (!signedIn) {
-    return <Redirect href="/(auth)/login" />;
+    return <Redirect href={href("/(auth)/login")} />;
   }
 
   return (
     <AccountRuntime>
-      <Tabs
-        screenOptions={({ route }) => ({
+      <Stack
+        screenOptions={{
           headerShown: true,
-          tabBarActiveTintColor: "#C44738",
-          tabBarInactiveTintColor: "#6B7280",
-          tabBarIcon: ({ color, size, focused }) => {
-            const name = TAB_ICONS[route.name];
-            if (!name) return null;
-            return <TabBarIcon name={name} color={color} size={size} focused={focused} />;
-          },
-        })}
+          headerTintColor: "#C44738",
+          headerStyle: { backgroundColor: "#F7F4EE" },
+          headerShadowVisible: false,
+          headerTitleStyle: { color: "#0F172A", fontWeight: "700" },
+          contentStyle: { backgroundColor: "#F7F4EE" },
+          gestureEnabled: true,
+          fullScreenGestureEnabled: false,
+          animation: "none",
+          animationDuration: 0,
+          freezeOnBlur: true,
+        }}
       >
-        <Tabs.Screen name="index" options={{ title: "ホーム" }} />
-        <Tabs.Screen
-          name="camera/index"
-          options={{ title: "撮影", unmountOnBlur: true, freezeOnBlur: true }}
+        <Stack.Screen
+          name="(tabs)"
+          options={{
+            headerShown: false,
+            gestureEnabled: false,
+            fullScreenGestureEnabled: false,
+          }}
         />
-        <Tabs.Screen name="review/index" options={{ title: "復習" }} />
-        <Tabs.Screen name="carte/index" options={{ title: "カルテ" }} />
-        <Tabs.Screen name="settings/index" options={{ title: "設定" }} />
-        <Tabs.Screen name="scan/batch" options={{ href: null, title: "一括確認" }} />
-        <Tabs.Screen name="scan/[id]" options={{ href: null }} />
-        <Tabs.Screen
+        <Stack.Screen
+          name="settings/billing"
+          options={{
+            title: t("nav.billing"),
+            headerLeft: () => <ScreenBackButton fallbackHref="/(app)/settings" />,
+          }}
+        />
+        <Stack.Screen
+          name="settings/devices"
+          options={{
+            title: t("nav.devices"),
+            headerLeft: () => <ScreenBackButton fallbackHref="/(app)/settings" />,
+          }}
+        />
+        <Stack.Screen
+          name="settings/legal/[doc]"
+          options={{
+            title: t("nav.legal"),
+            headerLeft: () => <ScreenBackButton fallbackHref="/(app)/settings" />,
+          }}
+        />
+        <Stack.Screen
+          name="children/index"
+          options={{
+            title: t("nav.children"),
+            headerLeft: () => <ScreenBackButton fallbackHref="/(app)/settings" />,
+          }}
+        />
+        <Stack.Screen
+          name="scans/index"
+          options={{
+            title: t("nav.history"),
+            headerLeft: () => <ScreenBackButton fallbackHref="/(app)" />,
+          }}
+        />
+        <Stack.Screen
+          name="scan/batch"
+          options={{
+            title: t("nav.batch"),
+            headerLeft: () => <ScreenBackButton fallbackHref="/(app)/camera" />,
+          }}
+        />
+        <Stack.Screen
+          name="scan/[id]"
+          options={({ route }) => {
+            const from = (route.params as { from?: string } | undefined)?.from;
+            return {
+              title: t("nav.result"),
+              headerLeft: () => (
+                <ScreenBackButton
+                  fallbackHref={from === "history" ? "/(app)/scans" : "/(app)/scan/batch"}
+                />
+              ),
+            };
+          }}
+        />
+        <Stack.Screen
           name="print/index"
           options={{
-            href: null,
-            title: "印刷",
+            title: t("nav.print"),
             headerLeft: () => <ScreenBackButton fallbackHref="/(app)/review" />,
           }}
         />
-        <Tabs.Screen
+        <Stack.Screen
           name="print/preview"
           options={{
-            href: null,
-            title: "プレビュー",
+            title: t("nav.preview"),
             headerLeft: () => <ScreenBackButton fallbackHref="/(app)/print" />,
           }}
         />
-        <Tabs.Screen name="children/index" options={{ href: null, title: "子ども" }} />
-        <Tabs.Screen name="settings/billing" options={{ href: null, title: "料金プラン" }} />
-        <Tabs.Screen name="settings/devices" options={{ href: null, title: "ログイン端末" }} />
-        <Tabs.Screen name="settings/legal/[doc]" options={{ href: null, title: "表記" }} />
-      </Tabs>
+      </Stack>
     </AccountRuntime>
   );
 }

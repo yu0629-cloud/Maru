@@ -12,6 +12,7 @@ export {
   estimatePrintedRowHeight,
   gradeMarkFromMappedBox,
   gradeMarkLayout,
+  isAnswerSlotBox,
   isBlankStudentAnswer,
   isDisplayRectVisible,
   isGeminiBBox,

@@ -12,6 +12,7 @@ export type GradedProblemView = {
   id: string;
   problem_index: number;
   problem_label: string;
+  question_text: string;
   is_correct: boolean;
   mistake_type: keyof typeof MISTAKE_LABELS;
   parent_coaching_tip: string;

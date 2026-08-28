@@ -2,12 +2,13 @@ import { shouldUseRemote } from "@/src/lib/backend";
 import { maruLog, maruStep } from "@/src/lib/debug/maruLog";
 import { isExpoGo } from "@/src/lib/env";
 import { withTimeout } from "@/src/lib/async/timeout";
-import { compressScanForGrade, persistScanImage } from "@/src/lib/files/scan-image";
+import { compressScanForGrade, persistScanImage, toFileUri } from "@/src/lib/files/scan-image";
 import { uploadCompressedScan } from "@/src/lib/storage/upload-scan";
 import { getMemoryAccessToken } from "@/src/lib/supabase/access-token";
 import { supabase } from "@/src/lib/supabase/client";
 import { gradeResultToView, MOCK_GRADE_RESULT } from "@/src/features/grading/mock";
 import { recountScore } from "@/src/features/grading/corrections";
+import { normalizeSubject } from "@/src/features/scans/subject";
 import { useScanStore, type ScanRecord } from "@/src/stores/scanStore";
 import { problemsNeedingInpaint } from "@/src/features/grading/corrections";
 import type { GradeResult } from "@/src/types/grading";
@@ -29,8 +30,10 @@ async function mockGrade(input: { uri: string; childId: string }): Promise<ScanR
     id,
     childId: input.childId,
     status: "completed",
-    localUri: input.uri,
+    localUri: toFileUri(input.uri),
     isDemo: true,
+    createdAt: new Date().toISOString(),
+    subject: "math",
     overall_score: recountScore(problems),
     problems,
   };
@@ -42,6 +45,7 @@ function recordFromGradeResult(input: {
   scanId: string;
   childId: string;
   localUri: string;
+  originalStoragePath?: string | null;
   result: GradeResult;
 }): ScanRecord {
   const problems = gradeResultToView(input.result, input.scanId).map((problem) => ({
@@ -52,7 +56,11 @@ function recordFromGradeResult(input: {
     id: input.scanId,
     childId: input.childId,
     status: "completed",
-    localUri: input.localUri,
+    localUri: toFileUri(input.localUri),
+    originalStoragePath: input.originalStoragePath,
+    originalPurgedAt: null,
+    createdAt: new Date().toISOString(),
+    subject: normalizeSubject(input.result.subject) ?? "other",
     overall_score: input.result.overall_score ?? recountScore(problems),
     problems,
   };
@@ -81,6 +89,7 @@ function mapGradeScanError(status: number, payload: { error?: string; message?: 
 type GradeScanPayload = {
   ok?: boolean;
   scanId?: string | null;
+  subject?: GradeResult["subject"];
   overall_score?: GradeResult["overall_score"];
   problems?: GradeResult["problems"];
   error?: string;
@@ -183,7 +192,8 @@ async function gradeViaEdgeFunction(input: {
     scanId: payload.scanId ?? `scan-${Date.now()}`,
     childId: input.childId,
     localUri: compressed.uri,
-    result: { overall_score: payload.overall_score, problems: payload.problems },
+    originalStoragePath: uploaded.storagePath,
+    result: { subject: payload.subject, overall_score: payload.overall_score, problems: payload.problems },
   });
 }
 

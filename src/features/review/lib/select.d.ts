@@ -4,7 +4,7 @@ export function selectDailyReviews<
   T extends { status: string; nextReviewOn: string; consecutiveMisses: number },
 >(
   items: T[],
-  options?: { min?: number; max?: number; today?: string },
+  options?: { min?: number; max?: number; today?: string; masteryByKey?: Record<string, { isMastered?: boolean; nextReviewDate?: string | null }> },
 ): {
   daily: T[];
   truncated: boolean;

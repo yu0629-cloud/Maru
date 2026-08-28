@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { REVIEW_CONFIG } from "@/src/constants/review";
 import { MOCK_REVIEW_ITEMS } from "@/src/features/review/mock";
 import { shouldUseRemote } from "@/src/lib/backend";
 import { supabase } from "@/src/lib/supabase/client";
 import { useReviewStore } from "@/src/stores/reviewStore";
+import { EMPTY_TOPIC_MASTERY, useTopicMasteryStore } from "@/src/stores/topicMasteryStore";
 import {
   applyReviewResult,
   isolateLeeches,
@@ -11,7 +12,9 @@ import {
   todayIso,
   type ReviewQueueItem,
 } from "@/src/features/review/select";
+import { displayQuestionText, displayTopicTag, hasPrintableQuestion } from "@/src/features/print/lib/from-reviews.mjs";
 import { useCurrentChild } from "@/src/hooks/useCurrentChild";
+import { t } from "@/src/i18n";
 
 export function useDailyReviews() {
   const { currentChild, currentChildId } = useCurrentChild();
@@ -48,24 +51,33 @@ export function useDailyReviews() {
     const { data: problems } = await supabase
       .from("problems")
       .select(
-        "id, scan_id, problem_label, unit, topic_tags, blanked_storage_path, cropped_storage_path, bounding_box, gemini_bbox, is_correct, student_answer, parent_coaching_tip, correct_answer, subject, problem_type",
+        "id, scan_id, problem_label, question_text, unit, topic_tags, blanked_storage_path, cropped_storage_path, crop_purged_at, blank_purged_at, bounding_box, gemini_bbox, is_correct, student_answer, parent_coaching_tip, correct_answer, subject, problem_type, created_at",
       )
       .in("id", problemIds.length ? problemIds : ["00000000-0000-0000-0000-000000000000"]);
 
     const problemMap = new Map((problems ?? []).map((problem) => [problem.id, problem]));
     const scanIds = [...new Set((problems ?? []).map((problem) => problem.scan_id).filter(Boolean))];
     const { data: scans } = scanIds.length
-      ? await supabase.from("scans").select("id, original_storage_path").in("id", scanIds)
-      : { data: [] as Array<{ id: string; original_storage_path: string | null }> };
+      ? await supabase
+          .from("scans")
+          .select("id, original_storage_path, original_purged_at")
+          .in("id", scanIds)
+      : { data: [] as Array<{ id: string; original_storage_path: string | null; original_purged_at: string | null }> };
     const scanMap = new Map((scans ?? []).map((scan) => [scan.id, scan]));
-    const baseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? "";
     const assignmentMap = new Map((assigned ?? []).map((row) => [row.review_queue_id, row]));
     const mapped: ReviewQueueItem[] = (queueRows ?? []).map((row) => {
       const problem = problemMap.get(row.problem_id);
       const assignment = assignmentMap.get(row.id);
-      const originalPath = problem ? scanMap.get(problem.scan_id)?.original_storage_path : null;
+      const scan = problem ? scanMap.get(problem.scan_id) : undefined;
+      const originalPath = scan?.original_storage_path ?? null;
       const blankPath = problem?.blanked_storage_path;
       const cropPath = problem?.cropped_storage_path;
+      const mediaExpired = Boolean(
+        (problem?.crop_purged_at || problem?.blank_purged_at || scan?.original_purged_at) &&
+          !blankPath &&
+          !cropPath &&
+          !originalPath,
+      );
       return {
         id: row.id,
         assignmentId: assignment?.id,
@@ -79,12 +91,17 @@ export function useDailyReviews() {
         lastResult: row.last_result,
         leechAt: row.leech_at,
         completed: assignment?.completed ?? false,
-        label: problem?.problem_label ?? "問",
-        topicTag: problem?.unit ?? problem?.topic_tags?.[0] ?? "未分類",
-        imageSrc: blankPath ? `${baseUrl}/storage/v1/object/public/problem-blanks/${blankPath}` : "",
-        blankedImageSrc: blankPath ? `${baseUrl}/storage/v1/object/public/problem-blanks/${blankPath}` : "",
-        croppedImageSrc: cropPath ? `${baseUrl}/storage/v1/object/public/problem-crops/${cropPath}` : "",
-        originalImageSrc: originalPath ? `${baseUrl}/storage/v1/object/public/scan-originals/${originalPath}` : "",
+        label: problem?.problem_label ?? t("common.questionBare"),
+        topicTag: displayTopicTag(problem?.unit ?? problem?.topic_tags?.[0], problem?.problem_label),
+        questionText: displayQuestionText(problem?.question_text, problem?.problem_label),
+        blankedPath: blankPath ?? "",
+        croppedPath: cropPath ?? "",
+        originalPath: originalPath ?? "",
+        imageSrc: "",
+        blankedImageSrc: "",
+        croppedImageSrc: "",
+        originalImageSrc: "",
+        mediaExpired,
         bbox: problem?.gemini_bbox ?? undefined,
         cropBox: problem?.bounding_box ?? undefined,
         isCorrect: problem?.is_correct ?? false,
@@ -95,20 +112,37 @@ export function useDailyReviews() {
         parentCoachingTip: problem?.parent_coaching_tip ?? "",
         subject: problem?.subject ?? undefined,
         problemType: problem?.problem_type ?? undefined,
+        createdAt: problem?.created_at ?? undefined,
       };
     });
     setItems(mapped);
   }, [currentChildId, mock, setItems]);
 
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  const fetchedKeyRef = useRef<string | null>(null);
 
-  const selected = useMemo(
-    () => selectDailyReviews(items, { min: REVIEW_CONFIG.dailyMin, max: REVIEW_CONFIG.dailyMax }),
-    [items],
+  useEffect(() => {
+    const key = `${currentChildId ?? "none"}:${mock ? "mock" : "remote"}`;
+    if (fetchedKeyRef.current === key) return;
+    fetchedKeyRef.current = key;
+    void refresh();
+  }, [currentChildId, mock, refresh]);
+
+  const masteryByKey = useTopicMasteryStore((state) =>
+    currentChildId ? state.byChild[currentChildId] ?? EMPTY_TOPIC_MASTERY : EMPTY_TOPIC_MASTERY,
   );
-  const leeches = useMemo(() => isolateLeeches(items), [items]);
+
+  const printableItems = useMemo(() => items.filter(hasPrintableQuestion), [items]);
+  const selected = useMemo(
+    () =>
+      selectDailyReviews(printableItems, {
+        min: REVIEW_CONFIG.dailyMin,
+        max: REVIEW_CONFIG.dailyMax,
+        masteryByKey,
+      }),
+    [printableItems, masteryByKey],
+  );
+  const daily = selected.daily;
+  const leeches = useMemo(() => isolateLeeches(printableItems), [printableItems]);
 
   const recordResult = useCallback(
     async (queueId: string, isCorrect: boolean) => {
@@ -119,6 +153,12 @@ export function useDailyReviews() {
             : item,
         ),
       );
+      if (isCorrect && currentChildId) {
+        const item = useReviewStore.getState().items.find((row) => row.id === queueId);
+        if (item?.topicTag) {
+          void useTopicMasteryStore.getState().advanceOnCorrect(currentChildId, item.subject, item.topicTag);
+        }
+      }
       if (mock) return;
       await supabase.rpc("record_review_result", {
         p_review_queue_id: queueId,
@@ -136,7 +176,8 @@ export function useDailyReviews() {
     loading: false,
     error: null as string | null,
     mocked: mock,
-    daily: selected.daily,
+    items,
+    daily,
     available: selected.available,
     belowMin: selected.belowMin,
     leeches,

@@ -23,11 +23,12 @@ import {
 } from "./validate.ts";
 import { gradeMath, gradeShortText, gradeFreeText } from "./hybrid-grade.ts";
 
-Deno.test("responseSchema は5キー（bbox 含む）を必須にする", () => {
+Deno.test("responseSchema は question_text を含む抽出キーを必須にする", () => {
   assertEquals(GRADE_RESPONSE_SCHEMA.required, ["problems"]);
   const item = GRADE_RESPONSE_SCHEMA.properties.problems.items;
   assertEquals(item.required, [
     "problem_index",
+    "question_text",
     "student_answer",
     "correct_answer",
     "type",
@@ -35,11 +36,15 @@ Deno.test("responseSchema は5キー（bbox 含む）を必須にする", () => 
   ]);
   assertEquals(Object.keys(item.properties), [
     "problem_index",
+    "question_text",
     "student_answer",
     "correct_answer",
     "type",
+    "topic",
     "bbox",
   ]);
+  assertEquals(item.properties.question_text.description.includes("16"), true);
+  assertEquals(item.properties.problem_index.description.includes("16"), true);
   assertEquals(item.properties.type.enum, ["math", "text"]);
   assertEquals(item.properties.bbox.type, "ARRAY");
   assertEquals(item.properties.bbox.items.type, "NUMBER");
@@ -48,7 +53,7 @@ Deno.test("responseSchema は5キー（bbox 含む）を必須にする", () => 
   assert(!("needs_inpaint" in item.properties));
   assert(!("problem_type" in item.properties));
   assert(!("parent_coaching_tip" in item.properties));
-  assert(!("question_text" in item.properties));
+  assert(!("is_correct" in item.properties));
 });
 
 Deno.test("既定は 3.5 flash-lite で thinkingLevel minimal・temperature 0 の REST 直叩きする", () => {
@@ -158,14 +163,14 @@ Deno.test("不正な得点や空の problems は拒否する", () => {
   );
 });
 
-Deno.test("1次プロンプトは抽出5キーのみで、正誤・思考・解説を禁止する", () => {
+Deno.test("1次プロンプトは問題文 OCR を必須にし、正誤・思考・解説を禁止する", () => {
   const prompt = buildSystemPrompt(SAMPLE_CARTE, {
     name: "はると",
     gradeLabel: "小4",
     examTarget: "中学受験",
   });
   assert(prompt.includes("はると"));
-  assert(prompt.includes("problem_index, student_answer, correct_answer, type, bbox"));
+  assert(prompt.includes("problem_index, question_text, student_answer, correct_answer, type, bbox"));
   assert(prompt.includes("1問=1件"));
   assert(prompt.includes("math"));
   assert(prompt.includes("text"));
@@ -175,7 +180,15 @@ Deno.test("1次プロンプトは抽出5キーのみで、正誤・思考・解�
   assert(prompt.includes("薄い鉛筆"));
   assert(prompt.includes("雪だるま"));
   assert(prompt.includes("採点・思考・解説は禁止"));
-  assert(!prompt.includes("question_text"));
+  assert(prompt.includes("question_text"));
+  assert(prompt.includes("0 + 7 ="));
+  assert(prompt.includes("【抽出例】"));
+  assert(prompt.includes("⑯"));
+  assert(prompt.includes("2 + 4 ="));
+  assert(prompt.includes('problem_index: "16"'));
+  assert(prompt.includes("2 + 6 ="));
+  assert(prompt.includes("解答欄"));
+  assert(prompt.includes("問題番号だけ"));
   assert(!prompt.includes("short_text"));
   assert(!prompt.includes("free_text"));
   assert(!prompt.includes("difficulty_level"));
@@ -210,8 +223,12 @@ Deno.test("problems 行へ一括変換し、inpaint 対象だけ残す", () => {
   });
   assertEquals(rows.length, 4);
   assertEquals(rows[1].problem_label, "大問1 (2)");
+  assertEquals(rows[1].question_text, "52 - 18 =");
+  assertEquals(rows[0].question_text, "8 × 9 =");
   assertEquals(rows[1].problem_index, 2);
   assertEquals(rows[2].subject, "math");
+  assertEquals(rows[1].topic, "繰り下がり");
+  assertEquals(rows[1].unit, "繰り下がり");
   assertEquals(rows[3].problem_type, "math_geometry_graph");
   assertEquals(inferSubject("立体切断"), "math");
   assertEquals(inferSubject("漢字書き取り", "kanji"), "japanese");
@@ -552,6 +569,59 @@ Deno.test("ハイブリッド採点は計算をプログラム判定し、表記
   assertEquals(graded.problems[2].parent_coaching_tip, "空欄。まず1つ書こう");
   assert(graded.problems[0].parent_coaching_tip === "");
   assert(graded.problems[1].parent_coaching_tip.length <= 20);
+});
+
+Deno.test("Gemini の question_text / questions エイリアスから問題文を残す", () => {
+  const graded = gradeGeminiResponse({
+    questions: [
+      {
+        question_number: "3",
+        question_text: "0 + 7 =",
+        user_answer: "0",
+        correct_answer: "7",
+        is_correct: false,
+        topic: "たし算",
+      },
+    ],
+  });
+  assertEquals(graded.problems.length, 1);
+  assertEquals(graded.problems[0].problem_index, "3");
+  assertEquals(graded.problems[0].question_text, "0 + 7 =");
+  assertEquals(graded.problems[0].student_answer, "0");
+  assertEquals(graded.problems[0].is_correct, false);
+  assertEquals(graded.problems[0].topic_tag, "たし算");
+  const rows = toProblemInserts(graded, {
+    scanId: "11111111-1111-1111-1111-111111111111",
+    childId: "22222222-2222-2222-2222-222222222222",
+  });
+  assertEquals(rows[0].problem_label, "3");
+  assertEquals(rows[0].question_text, "0 + 7 =");
+});
+
+Deno.test("question_text が問題番号だけのときは捨てる", () => {
+  const graded = gradeGeminiResponse({
+    problems: [
+      {
+        problem_index: "16",
+        question_text: "16",
+        student_answer: "6",
+        correct_answer: "6",
+        type: "math",
+        bbox: [80, 60, 180, 420],
+      },
+      {
+        problem_index: "16",
+        question_text: "2 + 4 =",
+        student_answer: "6",
+        correct_answer: "6",
+        type: "math",
+        bbox: [180, 60, 280, 420],
+      },
+    ],
+  });
+  assertEquals(graded.problems[0].question_text, "");
+  assertEquals(graded.problems[1].question_text, "2 + 4 =");
+  assertEquals(graded.problems[1].problem_index, "16");
 });
 
 

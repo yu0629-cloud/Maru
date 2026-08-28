@@ -1,6 +1,15 @@
 export type SubscriptionTier = "free" | "standard" | "family";
 export type GradeCode = "e1" | "e2" | "e3" | "e4" | "e5" | "e6" | "j1" | "j2" | "j3";
-export type SubjectCode = "math" | "japanese" | "science" | "social" | "english" | "other";
+export type SubjectCode =
+  | "math"
+  | "japanese"
+  | "spelling_phonics"
+  | "reading"
+  | "writing_grammar"
+  | "science"
+  | "social_studies"
+  | "world_languages"
+  | "other";
 export type ScanStatus =
   | "pending"
   | "uploading"
@@ -123,6 +132,26 @@ export type Database = {
         Relationships: [];
         Update: Partial<Database["public"]["Tables"]["child_cartes"]["Row"]>;
       };
+      topic_mastery: {
+        Row: {
+          id: string;
+          child_id: string;
+          subject: string;
+          topic: string;
+          is_mastered: boolean;
+          mastered_at: string | null;
+          review_stage: number;
+          next_review_date: string | null;
+          updated_at: string;
+        };
+        Insert: Partial<Database["public"]["Tables"]["topic_mastery"]["Row"]> & {
+          child_id: string;
+          subject: string;
+          topic: string;
+        };
+        Relationships: [];
+        Update: Partial<Database["public"]["Tables"]["topic_mastery"]["Row"]>;
+      };
       scans: {
         Row: {
           id: string;
@@ -130,6 +159,10 @@ export type Database = {
           child_id: string;
           original_storage_path: string | null;
           annotated_storage_path: string | null;
+          thumbnail_storage_path: string | null;
+          original_purged_at: string | null;
+          annotated_purged_at: string | null;
+          original_retain_until: string | null;
           status: ScanStatus;
           subject: SubjectCode | null;
           unit_hint: string | null;
@@ -157,6 +190,7 @@ export type Database = {
           child_id: string;
           problem_index: number;
           problem_label: string | null;
+          question_text: string | null;
           bounding_box: BoundingBox;
           is_correct: boolean | null;
           student_answer: string | null;
@@ -164,6 +198,7 @@ export type Database = {
           explanation: string | null;
           subject: SubjectCode | null;
           unit: string | null;
+          topic: string | null;
           topic_tags: string[];
           difficulty_level: DifficultyLevel | null;
           mistake_type: MistakeType | null;
@@ -173,6 +208,8 @@ export type Database = {
           gemini_bbox: GeminiBBox | null;
           cropped_storage_path: string | null;
           blanked_storage_path: string | null;
+          crop_purged_at: string | null;
+          blank_purged_at: string | null;
           created_at: string;
         };
         Insert: Partial<Database["public"]["Tables"]["problems"]["Row"]> & {

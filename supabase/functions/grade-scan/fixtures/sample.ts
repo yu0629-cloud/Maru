@@ -27,10 +27,12 @@ export const SAMPLE_CARTE: CarteJson = {
 };
 
 export const SAMPLE_GRADE_RESULT: GradeResult = {
+  subject: "math",
   overall_score: { earned: 7, max: 10 },
   problems: [
     {
       problem_index: "大問1 (1)",
+      question_text: "8 × 9 =",
       bbox: [80, 60, 260, 940],
       is_correct: true,
       student_answer: "72",
@@ -44,6 +46,7 @@ export const SAMPLE_GRADE_RESULT: GradeResult = {
     },
     {
       problem_index: "大問1 (2)",
+      question_text: "52 - 18 =",
       bbox: [270, 60, 460, 940],
       is_correct: false,
       student_answer: "43",
@@ -58,6 +61,7 @@ export const SAMPLE_GRADE_RESULT: GradeResult = {
     },
     {
       problem_index: "大問2",
+      question_text: "つるとかめが合わせて10ひき、足の数が34本。それぞれ何ひき？",
       bbox: [480, 60, 820, 940],
       is_correct: false,
       student_answer: "つる4ひき、かめ6ひき",
@@ -73,6 +77,7 @@ export const SAMPLE_GRADE_RESULT: GradeResult = {
     },
     {
       problem_index: "大問3",
+      question_text: "立方体を切った切り口の形は？",
       bbox: [830, 60, 980, 940],
       is_correct: false,
       student_answer: "",

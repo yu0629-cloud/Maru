@@ -21,6 +21,7 @@ export function useChildren() {
 
   useEffect(() => {
     if (!signedIn) return;
+    if (useChildStore.getState().children.length > 0) return;
     void hydrateChildren();
   }, [signedIn, userId]);
 

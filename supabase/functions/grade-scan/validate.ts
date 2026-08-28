@@ -13,8 +13,9 @@ import {
   isProblemType,
   mergeCalcBlocks,
 } from "./problem-types.ts";
-import { gradeFromGeminiPayload } from "./hybrid-grade.ts";
+import { gradeFromGeminiPayload, isQuestionNumberOnly } from "./hybrid-grade.ts";
 import { parseJsonPayload } from "./parse-json.mjs";
+import { resolveScanSubject } from "./subject.ts";
 
 export class GradeValidationError extends Error {
   constructor(message: string) {
@@ -97,15 +98,19 @@ export function normalizeProblem(raw: unknown, index: number): GradeProblem {
 
   const isCorrect = asBoolean(obj.is_correct, `${path}.is_correct`);
   const studentAnswer = asString(obj.student_answer, `${path}.student_answer`);
-  const topicTag = optionalString(obj.topic_tag) ?? "未分類";
+  const topicTag = optionalString(obj.topic_tag) ?? optionalString(obj.topic) ?? "未分類";
   const problemIndex = asString(obj.problem_index, `${path}.problem_index`) || `問${index + 1}`;
   const correctAnswer = asString(obj.correct_answer, `${path}.correct_answer`);
+  const questionTextRaw =
+    optionalString(obj.question_text) ?? optionalString(obj.questionText) ?? optionalString(obj.prompt) ?? "";
+  const questionText = isQuestionNumberOnly(questionTextRaw) ? "" : questionTextRaw;
 
   const inferredType = isProblemType(obj.problem_type)
     ? obj.problem_type
     : inferProblemType({
         topicTag,
         problemIndex,
+        questionText,
         studentAnswer,
         correctAnswer,
       });
@@ -143,6 +148,7 @@ export function normalizeProblem(raw: unknown, index: number): GradeProblem {
 
   return {
     problem_index: problemIndex,
+    question_text: questionText,
     bbox,
     is_correct: isCorrect,
     student_answer: studentAnswer,
@@ -184,6 +190,7 @@ export function validateGradeResult(raw: unknown): GradeResult {
   }
 
   return {
+    subject: resolveScanSubject({ subject: obj.subject, problems }),
     overall_score: { earned, max },
     problems,
   };

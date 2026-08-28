@@ -1,3 +1,5 @@
+import { selectBalancedReviews } from "../../carte/lib/mastery.mjs";
+
 export function todayIso(now = new Date()) {
   const y = now.getFullYear();
   const m = String(now.getMonth() + 1).padStart(2, "0");
@@ -10,23 +12,7 @@ export function isDue(nextReviewOn, today = todayIso()) {
 }
 
 export function selectDailyReviews(items, options = {}) {
-  const min = options.min ?? 3;
-  const max = options.max ?? 5;
-  const today = options.today ?? todayIso();
-  const eligible = items
-    .filter((item) => item.status !== "leech" && item.status !== "mastered" && item.status !== "retired")
-    .filter((item) => isDue(item.nextReviewOn, today))
-    .sort((a, b) => {
-      if (a.nextReviewOn !== b.nextReviewOn) return a.nextReviewOn.localeCompare(b.nextReviewOn);
-      return b.consecutiveMisses - a.consecutiveMisses;
-    });
-  const picked = eligible.slice(0, max);
-  return {
-    daily: picked,
-    truncated: eligible.length > max,
-    belowMin: picked.length < min,
-    available: eligible.length,
-  };
+  return selectBalancedReviews(items, options);
 }
 
 export function isolateLeeches(items) {

@@ -1,9 +1,10 @@
+import { memo } from "react";
 import { View } from "react-native";
 
 const ICONS = ["home", "camera", "review", "carte", "settings"] as const;
 export type TabBarIconName = (typeof ICONS)[number];
 
-export function TabBarIcon({
+export const TabBarIcon = memo(function TabBarIcon({
   name,
   color,
   size,
@@ -16,7 +17,7 @@ export function TabBarIcon({
 }) {
   const stroke = Math.max(1.6, size * 0.08);
   return (
-    <View style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
+    <View pointerEvents="none" style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
       {name === "home" ? <HomeIcon color={color} size={size} stroke={stroke} filled={focused} /> : null}
       {name === "camera" ? <CameraIcon color={color} size={size} stroke={stroke} filled={focused} /> : null}
       {name === "review" ? <BookIcon color={color} size={size} stroke={stroke} filled={focused} /> : null}
@@ -24,7 +25,7 @@ export function TabBarIcon({
       {name === "settings" ? <SettingsIcon color={color} size={size} stroke={stroke} filled={focused} /> : null}
     </View>
   );
-}
+});
 
 function HomeIcon({
   color,

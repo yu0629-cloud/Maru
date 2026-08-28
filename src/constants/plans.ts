@@ -14,5 +14,7 @@ export {
   previewQuotaState,
   maxChildrenForTier,
   offeringsForPaywall,
+  PAYWALL_FREE_CARRYOVER_MESSAGE,
+  quotaExhaustedMessage,
   tierFromEntitlementIds,
 } from "@/src/features/billing/lib/catalog.mjs";

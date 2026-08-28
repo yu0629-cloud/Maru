@@ -14,10 +14,18 @@ const reviewLib = join(root, "src/features/review/lib/select.mjs");
 const {
   buildPrintHtml,
   chooseAnswerStyle,
+  flattenWorksheetItems,
+  extractMathExpression,
+  formatMathExpression,
+  looksLikeMath,
   toClipItems,
   packClipRows,
+  packWorksheetRows,
+  paginateWorksheetRows,
+  paginateWorksheetItems,
   layoutKind,
   geminiBBoxToNormalizedBox,
+  expandPrintCropBox,
 } = await import(pathToFileURL(printLib).href);
 const { applyReviewResult, isolateLeeches, selectDailyReviews } = await import(
   pathToFileURL(reviewLib).href
@@ -32,6 +40,13 @@ assert.equal(chooseAnswerStyle({ topicTag: "漢字", subject: "japanese" }), "ka
 assert.equal(chooseAnswerStyle({ topicTag: "読解" }), "lined");
 pass("単元から解答欄スタイルを切り替える");
 
+assert.equal(extractMathExpression("72。8×9=72。"), "8×9");
+assert.equal(extractMathExpression("$5+4=$"), "5+4");
+assert.equal(formatMathExpression("8+2"), "8 + 2 =");
+assert.equal(formatMathExpression("0 + 7 ="), "0 + 7 =");
+assert.equal(formatMathExpression("$5 + 4 =$"), "5 + 4 =");
+pass("Gemini の式・解説から計算式テキストを取り出す");
+
 const compactBox = geminiBBoxToNormalizedBox([80, 60, 260, 940]);
 assert.equal(Number(compactBox.width.toFixed(2)), 0.88);
 assert.equal(layoutKind({ problemType: "calc_block" }, compactBox), "compact");
@@ -39,12 +54,56 @@ assert.equal(layoutKind({ problemType: "math_geometry_graph" }, compactBox), "wi
 assert.equal(layoutKind({ problemType: "reading_passage" }, { x: 0.05, y: 0.2, width: 0.9, height: 0.58 }), "wide");
 pass("短い計算は2列、図形・長文は1列にする");
 
+const thinAnswer = geminiBBoxToNormalizedBox([170, 119, 213, 513]);
+assert.ok(thinAnswer.height < 0.05);
+const expandedThin = expandPrintCropBox(thinAnswer);
+assert.ok(expandedThin.x < thinAnswer.x);
+assert.ok(expandedThin.width > 0.4);
+assert.ok(expandedThin.height >= 0.11);
+const thinClips = toClipItems([
+  {
+    id: "thin",
+    label: "2",
+    problemType: "calc_block",
+    bbox: [170, 119, 213, 513],
+    isCorrect: false,
+    originalImageSrc: "https://example.com/scan.jpg",
+    correctAnswer: "6",
+    parentCoachingTip: "",
+  },
+]);
+assert.equal(thinClips[0].label, "問2");
+assert.equal(thinClips[0].mask.kind, "right");
+assert.ok(thinClips[0].mask.x >= 0.6);
+const thinHtml = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月27日",
+  problems: [
+    {
+      id: "thin",
+      label: "2",
+      topicTag: "足し算",
+      bbox: [170, 119, 213, 513],
+      isCorrect: false,
+      questionText: "5 + 4 =",
+      originalImageSrc: "https://example.com/scan.jpg",
+      correctAnswer: "6",
+      parentCoachingTip: "",
+    },
+  ],
+});
+assert.match(thinHtml, /\(1\)/);
+assert.match(thinHtml, /answer-box/);
+assert.doesNotMatch(thinHtml, /<img/);
+pass("解答欄だけの bbox でも画像ではなくテキストと解答枠で印字する");
+
 const printProblems = [
-  { id: "ok", label: "かけ算", problemType: "calc_block", bbox: [40, 60, 80, 940], isCorrect: true, correctAnswer: "72", parentCoachingTip: "" },
-  { id: "c1", label: "計算", problemType: "calc_block", bbox: [80, 60, 260, 940], isCorrect: false, studentAnswer: "43", correctAnswer: "34", parentCoachingTip: "" },
-  { id: "c2", label: "漢字", problemType: "kanji", bbox: [100, 40, 220, 480], isCorrect: false, studentAnswer: "注", correctAnswer: "注", parentCoachingTip: "" },
-  { id: "g", label: "大問3", problemType: "math_geometry_graph", bbox: [830, 60, 980, 940], isCorrect: false, studentAnswer: "", correctAnswer: "正六角形", parentCoachingTip: "" },
-  { id: "r", label: "読解", problemType: "reading_passage", bbox: [200, 50, 780, 950], isCorrect: false, studentAnswer: "川", originalImageSrc: "https://example.com/scan.jpg", correctAnswer: "雨", parentCoachingTip: "" },
+  { id: "ok", label: "かけ算", problemType: "calc_block", bbox: [40, 60, 80, 940], isCorrect: true, studentAnswer: "72", correctAnswer: "72", parentCoachingTip: "" },
+  { id: "c1", label: "計算", problemType: "calc_block", bbox: [80, 60, 260, 940], isCorrect: false, questionText: "3 + 4 =", studentAnswer: "43", correctAnswer: "34", parentCoachingTip: "" },
+  { id: "c2", label: "漢字", problemType: "kanji", bbox: [100, 40, 220, 480], isCorrect: false, questionText: "「ちゅうい」の「ちゅう」", studentAnswer: "注", correctAnswer: "注", parentCoachingTip: "" },
+  { id: "g", label: "大問3", problemType: "math_geometry_graph", bbox: [830, 60, 980, 940], isCorrect: false, questionText: "切り口はどんな形ですか", studentAnswer: "", correctAnswer: "正六角形", parentCoachingTip: "" },
+  { id: "r", label: "読解", problemType: "reading_passage", bbox: [200, 50, 780, 950], isCorrect: false, questionText: "空欄に入る言葉を書きなさい", studentAnswer: "川", originalImageSrc: "https://example.com/scan.jpg", correctAnswer: "雨", parentCoachingTip: "" },
 ];
 const clips = toClipItems(printProblems);
 assert.equal(clips.length, 4);
@@ -61,18 +120,264 @@ const html = buildPrintHtml({
   dateLabel: "2026年8月26日",
   problems: printProblems,
 });
-assert.match(html, /size: A4 portrait/);
+assert.match(html, /size: A4/);
+assert.match(html, /margin:\s*12mm/);
 assert.match(html, /なまえ: はると/);
 assert.match(html, /2026年8月26日/);
 assert.doesNotMatch(html, /日付<span class="line"/);
-assert.match(html, /class="mask"/);
+assert.match(html, /answer-box/);
+assert.match(html, /font-size:\s*22px/);
+assert.match(html, /width:\s*60px/);
+assert.match(html, /height:\s*35px/);
+assert.match(html, /display:\s*inline-block/);
 assert.match(html, /page-break-inside: avoid/);
-assert.match(html, /cols-2/);
-assert.match(html, /cols-1/);
-assert.match(html, /css-crop/);
+assert.match(html, /white-space:\s*nowrap/);
+assert.match(html, /flex-direction:\s*row/);
+assert.doesNotMatch(html, /height:\s*297mm/);
+assert.doesNotMatch(html, /<img/);
+assert.doesNotMatch(html, /class="mask"/);
+assert.doesNotMatch(html, /css-crop/);
 assert.doesNotMatch(html, /保護者用カンペ/);
 assert.doesNotMatch(html, /声かけ/);
-pass("PDF は名前・日付を印字し、解答欄を白マスクする");
+pass("PDF は名前・日付を印字し、テキストと解答枠だけで構成する");
+
+const { collectPrintProblems, isIncorrectForPrint, isBlankPrintAnswer, displayQuestionText, displayTopicTag, stripLatexDollars, hasPrintableQuestion, selectProblemsForScope, DAILY_PRINT_MAX } = await import(
+  pathToFileURL(join(root, "src/features/print/lib/from-reviews.mjs")).href,
+);
+const scanIncorrects = collectPrintProblems({
+  childId: "child-1",
+  scans: [
+    {
+      childId: "child-1",
+      localUri: "file:///tmp/scan.jpg",
+      problems: [
+        {
+          id: "ok",
+          is_correct: true,
+          problem_label: "問1",
+          student_answer: "72",
+          correct_answer: "72",
+        },
+        {
+          id: "ng",
+          is_correct: false,
+          problem_label: "8+2",
+          student_answer: "9",
+          correct_answer: "10",
+          topic_tag: "足し算",
+        },
+      ],
+    },
+  ],
+  fallback: [{ id: "mock", label: "モック", isCorrect: false, correctAnswer: "x", parentCoachingTip: "" }],
+});
+assert.equal(scanIncorrects.length, 1);
+assert.equal(scanIncorrects[0].id, "ng");
+assert.equal(scanIncorrects[0].label, "8+2");
+assert.match(scanIncorrects[0].questionText, /8\+2/);
+assert.equal(scanIncorrects[0].correctAnswer, "10");
+assert.equal(scanIncorrects.some((item) => item.id === "mock"), false);
+pass("採点の不正解だけを集め、モックへ落とさない");
+
+const fromNumberOnly = collectPrintProblems({
+  childId: "child-1",
+  scans: [
+    {
+      childId: "child-1",
+      problems: [
+        {
+          id: "q3",
+          is_correct: false,
+          problem_label: "3",
+          question_text: "0 + 7 =",
+          student_answer: "0",
+          correct_answer: "7",
+        },
+      ],
+    },
+  ],
+});
+assert.equal(fromNumberOnly[0].label, "3");
+assert.match(fromNumberOnly[0].questionText, /0 \+ 7/);
+const formulaHtml = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月27日",
+  problems: fromNumberOnly,
+});
+assert.match(formulaHtml, /0 \+ 7/);
+assert.doesNotMatch(formulaHtml, />3\s*=</);
+assert.equal(looksLikeMath("3"), false);
+assert.equal(looksLikeMath("0 + 7 ="), true);
+const stems = flattenWorksheetItems(fromNumberOnly);
+assert.match(stems[0].stem, /0 \+ 7/);
+pass("問番号ではなく問題文・数式を復習プリントに出す");
+
+assert.equal(displayQuestionText("14", "14"), "");
+assert.equal(displayQuestionText("2 + 6 =", "14"), "2 + 6 =");
+assert.equal(displayQuestionText("$5+4=$", "1"), "5+4=");
+assert.equal(displayTopicTag("14", "14"), "");
+assert.equal(displayTopicTag("たし算", "14"), "たし算");
+assert.equal(stripLatexDollars("$5 + 4 =$"), "5 + 4 =");
+pass("復習カードは問番号の重複を出さず式だけを本文にする");
+
+const junkOnly = collectPrintProblems({
+  childId: "child-1",
+  scans: [
+    {
+      childId: "child-1",
+      problems: [
+        { id: "num", is_correct: false, problem_label: "14", question_text: "14", student_answer: "1", correct_answer: "8" },
+        { id: "empty", is_correct: false, problem_label: "15", student_answer: "2", correct_answer: "9" },
+        { id: "ok", is_correct: false, problem_label: "1", question_text: "$5+4=$", student_answer: "8", correct_answer: "9" },
+      ],
+    },
+  ],
+});
+assert.equal(junkOnly.length, 1);
+assert.equal(junkOnly[0].id, "ok");
+assert.equal(hasPrintableQuestion({ questionText: "14", label: "14", correctAnswer: "8" }), false);
+assert.equal(hasPrintableQuestion({ questionText: "$5+4=$", label: "1" }), true);
+const latexHtml = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月27日",
+  problems: junkOnly,
+});
+assert.match(latexHtml, /5 \+ 4/);
+assert.doesNotMatch(latexHtml, /\$/);
+assert.doesNotMatch(latexHtml, />14</);
+assert.match(latexHtml, /width:\s*60px/);
+assert.match(latexHtml, /display:\s*inline-block/);
+pass("番号だけの残骸を除外し、LaTeX の $ を描画前に除去する");
+
+const manyWrong = Array.from({ length: 8 }, (_, index) => ({
+  id: `q${index}`,
+  is_correct: false,
+  problem_label: `${index + 1}`,
+  question_text: `${index + 2} + ${index + 3} =`,
+  student_answer: "0",
+  correct_answer: String(index * 2 + 5),
+}));
+const dailyPick = collectPrintProblems({
+  childId: "child-1",
+  scans: [{ childId: "child-1", problems: manyWrong }],
+  scope: "daily",
+});
+const allPick = collectPrintProblems({
+  childId: "child-1",
+  scans: [{ childId: "child-1", problems: manyWrong }],
+  scope: "all",
+});
+assert.equal(DAILY_PRINT_MAX, 5);
+assert.equal(dailyPick.length, 5);
+assert.equal(allPick.length, 8);
+assert.equal(selectProblemsForScope(allPick, "daily").length, 5);
+const allPages = paginateWorksheetItems(flattenWorksheetItems(allPick));
+assert.equal(allPages.length, 2);
+assert.equal(allPages[0].length, 6);
+assert.equal(allPages[1].length, 2);
+const dailyHtml = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月27日",
+  problems: dailyPick,
+  scope: "daily",
+});
+assert.equal([...dailyHtml.matchAll(/class="sheet/g)].length, 1);
+assert.match(dailyHtml, /sheet single/);
+assert.match(dailyHtml, /\(5\)/);
+assert.doesNotMatch(dailyHtml, /\(6\)/);
+assert.doesNotMatch(dailyHtml, /height:\s*297mm/);
+const extraDaily = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月27日",
+  problems: allPick,
+  scope: "daily",
+});
+assert.doesNotMatch(extraDaily, /\(6\)/);
+const allHtml = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月27日",
+  problems: allPick,
+  scope: "all",
+});
+assert.equal([...allHtml.matchAll(/class="sheet/g)].length, 2);
+pass("今日の5問は先頭5問1枚、全問は1ページ6問で改ページする");
+
+assert.equal(isBlankPrintAnswer({ student_answer: "" }), true);
+assert.equal(isBlankPrintAnswer({ studentAnswer: "   " }), true);
+assert.equal(isBlankPrintAnswer({ user_answer: null }), true);
+assert.equal(isBlankPrintAnswer({ status: "unanswered" }), true);
+assert.equal(isBlankPrintAnswer({ mistake_type: "blank", student_answer: "9" }), true);
+assert.equal(isBlankPrintAnswer({ student_answer: "9" }), false);
+assert.equal(isIncorrectForPrint({ is_correct: false, student_answer: "9" }), true);
+assert.equal(isIncorrectForPrint({ is_correct: true, student_answer: "9" }), false);
+assert.equal(isIncorrectForPrint({ is_correct: true, student_answer: "" }), true);
+assert.equal(isIncorrectForPrint({ is_correct: null, student_answer: "" }), true);
+const withBlanks = collectPrintProblems({
+  childId: "child-1",
+  scans: [
+    {
+      childId: "child-1",
+      problems: [
+        { id: "ok", is_correct: true, problem_label: "1+1", student_answer: "2", correct_answer: "2" },
+        { id: "miss", is_correct: false, problem_label: "2+2", student_answer: "5", correct_answer: "4" },
+        { id: "blank", is_correct: false, problem_label: "0+7", student_answer: "", correct_answer: "7", mistake_type: "blank" },
+        { id: "unanswered", is_correct: true, problem_label: "5+3", student_answer: "", correct_answer: "8" },
+      ],
+    },
+  ],
+});
+assert.equal(withBlanks.map((item) => item.id).sort().join(","), "blank,miss,unanswered");
+const blankHtml = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月27日",
+  problems: withBlanks,
+});
+assert.match(blankHtml, /0 \+ 7/);
+assert.match(blankHtml, /5 \+ 3/);
+assert.match(blankHtml, /2 \+ 2/);
+assert.doesNotMatch(blankHtml, /1 \+ 1/);
+pass("空欄・未回答も解き直し対象としてテキスト印字する");
+
+const textHtml = buildPrintHtml({
+  title: "お直しプリント",
+  childName: "はると",
+  dateLabel: "2026年8月27日",
+  problems: scanIncorrects,
+});
+assert.match(textHtml, /8 \+ 2/);
+assert.match(textHtml, /answer-box/);
+assert.match(textHtml, /\(1\)/);
+assert.doesNotMatch(textHtml, /<img/);
+pass("画像が無い不正解も問題番号と問題文を印字する");
+
+const fromExplanation = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月27日",
+  problems: [
+    {
+      id: "mul",
+      label: "大問1 (1)",
+      topicTag: "かけ算",
+      isCorrect: false,
+      correctAnswer: "72。8×9=72。",
+      parentCoachingTip: "",
+    },
+  ],
+});
+assert.match(fromExplanation, /8\s*×\s*9/);
+assert.doesNotMatch(fromExplanation, /72。/);
+pass("解説文から計算式だけを取り出して印字する");
+
+const emptyHtml = buildPrintHtml({ title: "空", childName: "はると", dateLabel: "", problems: [] });
+assert.match(emptyHtml, /間違えた問題はまだありません/);
+pass("不正解が無いときは空メッセージを出す");
 
 const outDir = join(root, "scripts/output");
 mkdirSync(outDir, { recursive: true });
@@ -87,8 +392,52 @@ const previewScreen = readFileSync(join(root, "app/(app)/print/preview.tsx"), "u
 assert.match(previewScreen, /PrintPreviewSheets/);
 assert.match(previewScreen, /ScreenBackButton/);
 assert.doesNotMatch(previewScreen, /ネイティブでは PDF/);
+assert.doesNotMatch(previewScreen, /切り抜きです/);
+const previewSheets = readFileSync(join(root, "src/features/print/PreviewSheets.tsx"), "utf8");
+assert.match(previewSheets, /flattenWorksheetItems/);
+assert.match(previewSheets, /width: 60/);
+assert.match(previewSheets, /sanitizeStem/);
+assert.doesNotMatch(previewSheets, /CroppedImage/);
 const printScreen = readFileSync(join(root, "app/(app)/print/index.tsx"), "utf8");
 assert.doesNotMatch(printScreen, /保護者カンペシート/);
+assert.match(printScreen, /t\("print\.subtitle"\)/);
+assert.match(printScreen, /PrintScopeToggle/);
+assert.match(previewScreen, /PrintScopeToggle/);
+const reviewScreen = readFileSync(join(root, "app/(app)/(tabs)/review/index.tsx"), "utf8");
+assert.match(reviewScreen, /PrintScopeToggle/);
+assert.match(reviewScreen, /ReviewPrintList/);
+assert.match(reviewScreen, /t\("review.printAll"\)|t\("review.printSelected"/);
+assert.doesNotMatch(reviewScreen, /Leech/);
+assert.doesNotMatch(reviewScreen, /要指導リストへ退場/);
+assert.doesNotMatch(reviewScreen, /今日の出題は少なめ/);
+const reviewList = readFileSync(join(root, "src/features/review/ReviewPrintList.tsx"), "utf8");
+assert.match(reviewList, /accessibilityRole="checkbox"/);
+assert.match(reviewList, /t\("review.answered"\)|t\("review.unanswered"/);
+assert.match(reviewList, /togglePrintSelection/);
+const printStore = readFileSync(join(root, "src/stores/printStore.ts"), "utf8");
+assert.match(printStore, /excludedIds/);
+const printHook = readFileSync(join(root, "src/features/print/usePrintDocument.ts"), "utf8");
+assert.match(printHook, /excluded\.has/);
+assert.match(printHook, /candidates/);
+const printService = readFileSync(join(root, "src/features/print/service.ts"), "utf8");
+assert.match(printService, /printToFileAsync/);
+assert.match(printService, /width:/);
+assert.match(printService, /height:/);
+assert.doesNotMatch(printService, /resolveImages/);
+assert.match(printService, /is_correct\.eq\.false/);
+assert.match(printService, /mistake_type\.eq\.blank/);
+assert.match(printService, /isIncorrectForPrint/);
+assert.match(printService, /question_text/);
+const reviewFetch = readFileSync(join(root, "src/features/review/useDailyReviews.ts"), "utf8");
+assert.match(reviewFetch, /question_text/);
+assert.match(reviewFetch, /displayQuestionText\(problem\?\.question_text/);
+assert.match(reviewFetch, /masteryByKey/);
+assert.match(reviewFetch, /advanceOnCorrect/);
+const selectSrc = readFileSync(join(root, "src/features/review/lib/select.mjs"), "utf8");
+assert.match(selectSrc, /selectBalancedReviews/);
+const enqueueSql = readFileSync(join(root, "supabase/migrations/20240827000018_enqueue_blank_problems.sql"), "utf8");
+assert.match(enqueueSql, /mistake_type = 'blank'/);
+assert.match(enqueueSql, /student_answer/);
 const printLayout = readFileSync(join(root, "app/(app)/_layout.tsx"), "utf8");
 assert.match(printLayout, /print\/preview[\s\S]*ScreenBackButton/s);
 pass("プレビューは実紙面を出し、戻るボタンがある");
@@ -114,6 +463,103 @@ const leeches = isolateLeeches(queue);
 assert.equal(leeches.length, 1);
 assert.equal(leeches[0].id, "L");
 pass("日次キューは最大5問、Leech と未来日は除外");
+
+const mixed = selectDailyReviews(
+  [
+    ...["a", "b", "c", "d"].map((id, index) => ({
+      id: `recent-${id}`,
+      status: "active",
+      nextReviewOn: today,
+      consecutiveMisses: 1,
+      isCorrect: false,
+      createdAt: "2026-08-22",
+      subject: "math",
+      topicTag: "くり上がり",
+      label: `R${index}`,
+    })),
+    {
+      id: "settle-1",
+      status: "active",
+      nextReviewOn: today,
+      consecutiveMisses: 1,
+      isCorrect: false,
+      createdAt: "2026-08-01",
+      subject: "math",
+      topicTag: "かけ算",
+      label: "S1",
+    },
+    {
+      id: "settle-2",
+      status: "active",
+      nextReviewOn: today,
+      consecutiveMisses: 1,
+      isCorrect: false,
+      createdAt: "2026-08-01",
+      subject: "math",
+      topicTag: "かけ算",
+      label: "S2",
+    },
+    {
+      id: "settle-ok",
+      status: "active",
+      nextReviewOn: today,
+      consecutiveMisses: 0,
+      isCorrect: true,
+      createdAt: "2026-08-01",
+      subject: "math",
+      topicTag: "かけ算",
+      label: "SOK",
+    },
+    {
+      id: "settle-ok-2",
+      status: "active",
+      nextReviewOn: today,
+      consecutiveMisses: 0,
+      isCorrect: true,
+      createdAt: "2026-08-01",
+      subject: "math",
+      topicTag: "かけ算",
+      label: "SOK2",
+    },
+    {
+      id: "settle-ok-3",
+      status: "active",
+      nextReviewOn: today,
+      consecutiveMisses: 0,
+      isCorrect: true,
+      createdAt: "2026-08-01",
+      subject: "math",
+      topicTag: "かけ算",
+      label: "SOK3",
+    },
+    {
+      id: "curve-1",
+      status: "active",
+      nextReviewOn: today,
+      consecutiveMisses: 0,
+      isCorrect: false,
+      createdAt: "2026-07-01",
+      subject: "japanese",
+      topicTag: "漢字",
+      label: "C1",
+    },
+  ],
+  {
+    today,
+    min: 3,
+    max: 5,
+    masteryByKey: {
+      "japanese::漢字": { isMastered: true, nextReviewDate: "2026-08-20" },
+    },
+  },
+);
+const mixedIds = mixed.daily.map((item) => item.id);
+assert.equal(mixed.daily.length, 5);
+assert.equal(mixedIds.filter((id) => String(id).startsWith("recent-")).length >= 2, true);
+assert.equal(mixedIds.some((id) => String(id).startsWith("settle-")), true);
+assert.equal(mixedIds.includes("curve-1"), true);
+assert.equal(new Set(mixed.daily.map((item) => item.topicTag)).size >= 2, true);
+pass("間違えた問題が5問以上なら優先度スコアでバランスよく抽出する");
 
 const afterMiss = applyReviewResult(
   { id: "c", status: "active", consecutiveMisses: 2, consecutiveHits: 0, intervalDays: 1, easeFactor: 2.5 },

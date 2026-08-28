@@ -46,14 +46,23 @@ assert.equal(quotaRemaining({ tier: "free", freeScansRemaining: 0, monthlyQuota:
 assert.equal(quotaRemaining({ tier: "standard", freeScansRemaining: 0, monthlyQuota: 150, monthlyUsed: 150, extraTicketBalance: 2 }), 2);
 pass("残数0は課金導線、チケット残は加算");
 
-const cameraSrc = readFileSync(join(root, "app/(app)/camera/index.tsx"), "utf8");
+const cameraSrc = readFileSync(join(root, "app/(app)/(tabs)/camera/index.tsx"), "utf8");
+assert.match(cameraSrc, /t\("billing\.freeCarryover"\)/);
 assert.match(cameraSrc, /from "expo-camera"/);
 assert.match(cameraSrc, /SCAN_CAPTURE_QUALITY/);
 assert.match(cameraSrc, /scanPaperDocuments/);
 assert.match(cameraSrc, /persistScanImage/);
 assert.match(cameraSrc, /enqueueScanJob/);
-assert.match(cameraSrc, /scanning=\{analyzingCount > 0\}/);
-assert.match(cameraSrc, />完了</);
+assert.match(cameraSrc, /t\("camera.gradeBatch"\)/);
+assert.match(cameraSrc, /t\("camera.reviewList"\)/);
+assert.match(cameraSrc, /scan\/\$\{job\.scanId\}/);
+assert.match(cameraSrc, /t\("camera.startScan"\)/);
+assert.match(cameraSrc, /t\("camera.pickLibrary"\)/);
+assert.match(cameraSrc, /ScanCaptureStage/);
+assert.match(cameraSrc, /hitSlop=\{TAP_HIT_SLOP\}/);
+assert.match(cameraSrc, /paddingBottom: 12/);
+assert.doesNotMatch(cameraSrc, /A4Finder/);
+assert.doesNotMatch(cameraSrc, /bg-black/);
 assert.doesNotMatch(cameraSrc, /takePictureAsync/);
 assert.doesNotMatch(cameraSrc, /launchCameraAsync/);
 assert.doesNotMatch(cameraSrc, /pictureSize/);
@@ -83,17 +92,19 @@ assert.match(queueSrc, /kickBatchQueue/);
 pass("採点キューは最大4並列で upload → grade-scan する");
 
 const batchSrc = readFileSync(join(root, "app/(app)/scan/batch.tsx"), "utf8");
-assert.match(batchSrc, /一括確認/);
+assert.match(batchSrc, /t\("batch.title"\)/);
 assert.match(batchSrc, /from=batch/);
 assert.match(batchSrc, /retryScanJob/);
 pass("一括確認画面から完了分を1枚ずつ開ける");
 
-const finderSrc = readFileSync(join(root, "src/components/A4Finder.tsx"), "utf8");
-assert.match(finderSrc, /どんどん次のプリントを撮ってください/);
-assert.match(finderSrc, /ScanSweep/);
-assert.match(finderSrc, /scanning/);
-assert.doesNotMatch(finderSrc, /丸付けするを押してください/);
-pass("ファインダー文言は連続撮影向け");
+const captureSrc = readFileSync(join(root, "src/components/ScanCaptureStage.tsx"), "utf8");
+assert.match(captureSrc, /t\("camera.autoHint"\)/);
+assert.match(captureSrc, /ScanSweep/);
+assert.match(captureSrc, /onOpenJob/);
+assert.match(captureSrc, /useScanPhotoUri/);
+assert.doesNotMatch(captureSrc, /border-white\/85/);
+assert.doesNotMatch(captureSrc, /丸付けするを押してください/);
+pass("撮影待機は空状態の説明とサムネイル一覧");
 
 const sweepSrc = readFileSync(join(root, "src/components/ScanSweep.tsx"), "utf8");
 assert.match(sweepSrc, /translateY/);
@@ -101,9 +112,30 @@ assert.match(sweepSrc, /useNativeDriver: true/);
 pass("解析中はスキャン線の演出を出す");
 
 const layoutSrc = readFileSync(join(root, "app/(app)/_layout.tsx"), "utf8");
+const tabsLayoutSrc = readFileSync(join(root, "app/(app)/(tabs)/_layout.tsx"), "utf8");
+const rootLayoutSrc = readFileSync(join(root, "app/_layout.tsx"), "utf8");
 assert.match(layoutSrc, /scan\/batch/);
-assert.match(layoutSrc, /tabBarIcon/);
-assert.match(layoutSrc, /TabBarIcon/);
+assert.match(layoutSrc, /gestureEnabled: true/);
+assert.match(layoutSrc, /fullScreenGestureEnabled: false/);
+assert.match(layoutSrc, /settings\/billing[\s\S]*ScreenBackButton/s);
+assert.match(readFileSync(join(root, "src/components/ScreenBackButton.tsx"), "utf8"), /router\.back\(\)/);
+assert.match(rootLayoutSrc, /flex: 1/);
+assert.match(rootLayoutSrc, /fullScreenGestureEnabled: false/);
+assert.match(tabsLayoutSrc, /tabBarIcon/);
+assert.match(tabsLayoutSrc, /TabBarIcon/);
+assert.match(tabsLayoutSrc, /useSafeAreaInsets/);
+assert.match(tabsLayoutSrc, /paddingBottom: tabBarBottom/);
+assert.match(tabsLayoutSrc, /height: 56 \+ tabBarBottom/);
+assert.match(tabsLayoutSrc, /hitSlop=\{TAP_HIT_SLOP\}/);
+assert.match(layoutSrc, /name="\(tabs\)"[\s\S]*gestureEnabled: false[\s\S]*fullScreenGestureEnabled: false/s);
+assert.match(tabsLayoutSrc, /zIndex: 100/);
+assert.match(tabsLayoutSrc, /pointerEvents: "auto"/);
+assert.match(tabsLayoutSrc, /detachInactiveScreens=\{false\}/);
+assert.match(tabsLayoutSrc, /freezeOnBlur: true/);
+assert.match(tabsLayoutSrc, /animationEnabled: false/);
+assert.match(layoutSrc, /animation: "none"/);
+assert.doesNotMatch(tabsLayoutSrc, /Button Pressed/);
+assert.doesNotMatch(cameraSrc, /withPressLog/);
 pass("一括確認ルートがタブに登録されている");
 pass("下部タブにアイコンを指定している");
 
@@ -191,6 +223,16 @@ assert.equal(aligned[0].size, aligned[0].r * 2);
 assert.ok(aligned[0].r < 16, "固定 22px より小さく、上下が重ならない");
 pass("〇✕を印刷行のYと等号右の解答位置へ揃える");
 
+const answerSlots = layoutAlignedGradeMarks([
+  { box: { x: 120, y: 40, width: 32, height: 28 }, isBlank: false },
+  { box: { x: 120, y: 80, width: 32, height: 28 }, isBlank: true },
+  { box: { x: 320, y: 40, width: 32, height: 28 }, isBlank: false },
+]);
+assert.ok(Math.abs(answerSlots[0].cx - 136) < 8, "解答欄 bbox の中央に〇✕を置く");
+assert.ok(Math.abs(answerSlots[0].cx - answerSlots[1].cx) < 8);
+assert.ok(answerSlots[2].cx > answerSlots[0].cx + 150, "右列の解答欄は左列より右");
+pass("解答欄 bbox ならマークを枠の中央に置く");
+
 const deskLetterbox = { offsetX: 0, offsetY: 0, displayWidth: 400, displayHeight: 500 };
 const clipped = layoutAlignedGradeMarks(
   [
@@ -249,14 +291,18 @@ assert.match(storeSrc2, /GradedProblemView/);
 pass("GradedProblemView と scanStore に bbox が載る");
 
 const overlaySrc = readFileSync(join(root, "src/components/GradingPhotoOverlay.tsx"), "utf8");
-assert.match(overlaySrc, /from "react-native-svg"/);
-assert.match(overlaySrc, /Circle/);
+assert.match(overlaySrc, /CorrectMark/);
+assert.match(overlaySrc, /useResolvedMarkStyle/);
 assert.match(overlaySrc, /ProblemDetailSheet/);
 assert.match(overlaySrc, /ZoomableView/);
 assert.match(overlaySrc, /mapGeminiBBoxToView/);
 assert.match(overlaySrc, /layoutAlignedGradeMarks/);
 assert.match(overlaySrc, /isBlankStudentAnswer/);
-assert.match(overlaySrc, /MARK_STROKE_WIDTH/);
+const markSrc = readFileSync(join(root, "src/components/GradeMark.tsx"), "utf8");
+assert.match(markSrc, /from "react-native-svg"/);
+assert.match(markSrc, /Circle/);
+assert.match(markSrc, /Path/);
+assert.match(markSrc, /MARK_STROKE_WIDTH/);
 assert.equal(MARK_STROKE_WIDTH, 2.25);
 assert.match(overlaySrc, /resizeMode="contain"/);
 assert.doesNotMatch(overlaySrc, /letterboxImageRect/);
@@ -274,6 +320,99 @@ assert.match(detailSrc, /GradingPhotoOverlay/);
 assert.match(detailSrc, /ProblemDetailSheet/);
 assert.match(detailSrc, /onPressProblem/);
 assert.match(detailSrc, /scrollEnabled=\{!photoGesturing\}/);
+assert.match(detailSrc, /useScanPhotoUri/);
+assert.match(detailSrc, /ExpiredMediaNotice/);
+const photoUriSrc = readFileSync(join(root, "src/features/storage/useScanPhotoUri.ts"), "utf8");
+assert.match(photoUriSrc, /isPreviewableScanUri/);
+assert.match(photoUriSrc, /toFileUri/);
+assert.match(photoUriSrc, /localFileExists/);
+assert.match(photoUriSrc, /signedStorageUrl/);
+assert.match(photoUriSrc, /originalStoragePath/);
+assert.doesNotMatch(detailSrc, /!current\.isDemo &&/);
+assert.match(detailSrc, /hydrateScanById/);
+assert.doesNotMatch(detailSrc, /ensureQuota/);
+assert.doesNotMatch(detailSrc, /quota\.remaining/);
+assert.doesNotMatch(detailSrc, /quotaExhaustedMessage/);
+assert.match(cameraSrc, /ensureQuota/);
+assert.match(cameraSrc, /quota\.remaining/);
 pass("結果画面が写真上の〇✕オーバーレイと詳細シートを持つ");
+pass("過去画像の閲覧は無料残数でブロックしない");
+
+const homeSrc = readFileSync(join(root, "app/(app)/(tabs)/index.tsx"), "utf8");
+assert.match(homeSrc, /RecentScansSection/);
+const recentSrc = readFileSync(join(root, "src/features/scans/RecentScansSection.tsx"), "utf8");
+assert.match(recentSrc, /t\("history.recentTitle"\)/);
+assert.match(recentSrc, /useScanHistory/);
+assert.match(recentSrc, /from=history/);
+assert.match(recentSrc, /layout="grid"/);
+const historyScreenSrc = readFileSync(join(root, "app/(app)/scans/index.tsx"), "utf8");
+assert.match(historyScreenSrc, /t\("history.title"\)/);
+assert.match(historyScreenSrc, /from=history/);
+assert.match(historyScreenSrc, /ScanHistoryCard/);
+const historyCardSrc = readFileSync(join(root, "src/components/ScanHistoryCard.tsx"), "utf8");
+assert.match(historyCardSrc, /t\("history\.expiredThumb"\)/);
+assert.match(historyCardSrc, /overall_score/);
+assert.match(historyCardSrc, /formatScanDateTime/);
+assert.match(layoutSrc, /scans\/index/);
+assert.match(layoutSrc, /from === "history"/);
+assert.match(detailSrc, /fromHistory/);
+assert.match(detailSrc, /t\("scan.backToHistory"\)/);
+assert.match(detailSrc, /t\("scan.textRecord"\)/);
+assert.match(detailSrc, /push\("\/\(app\)\/carte"\)/);
+const carteSrc = readFileSync(join(root, "app/(app)/(tabs)/carte/index.tsx"), "utf8");
+assert.match(carteSrc, /t\("carte.historyTitle"\)/);
+assert.match(carteSrc, /\/\(app\)\/scans/);
+pass("ホームとカルテから採点履歴へ入れ、期限切れはテキスト詳細を開く");
+
+const subjectTagSrc = readFileSync(join(root, "src/components/SubjectTag.tsx"), "utf8");
+assert.match(subjectTagSrc, /t\("subjectTag.pickTitle"\)/);
+assert.match(subjectTagSrc, /updateScanSubject/);
+assert.match(subjectTagSrc, /SUBJECT_CODES/);
+assert.match(subjectTagSrc, /SubjectTagProps/);
+assert.match(historyCardSrc, /SubjectTag/);
+assert.doesNotMatch(historyCardSrc, /absolute left-/);
+assert.match(historyCardSrc, /formatScanDateTime[\s\S]*SubjectTag[\s\S]*scoreLabel/s);
+assert.match(detailSrc, /SubjectTag/);
+assert.match(carteSrc, /CarteMastery/);
+assert.match(carteSrc, /RecentScansSection/);
+const updateSubjectSrc = readFileSync(join(root, "src/features/scans/updateSubject.ts"), "utf8");
+assert.match(updateSubjectSrc, /from\("scans"\)\.update\(\{ subject \}\)/);
+assert.match(updateSubjectSrc, /from\("problems"\)\.update\(\{ subject \}\)/);
+assert.match(storeSrc2, /updateSubject/);
+assert.match(readFileSync(join(root, "src/features/storage/hydrate-scans.ts"), "utf8"), /subject: normalizeSubject\(row\.subject\)/);
+pass("教科タグの表示と親の手動変更が履歴・結果・カルテにある");
+
+const manageSrc = readFileSync(join(root, "src/features/scans/manageScan.ts"), "utf8");
+assert.match(manageSrc, /deleteScanRecord/);
+assert.match(manageSrc, /reassignScanChild/);
+assert.match(manageSrc, /このプリントを削除しますか？カルテや復習の集計からも除外されます/);
+assert.match(manageSrc, /from\("scans"\)\.delete\(\)/);
+assert.match(manageSrc, /child_id: nextChildId/);
+assert.match(manageSrc, /update_child_carte/);
+assert.match(manageSrc, /storage\.from/);
+assert.match(historyCardSrc, /ScanPrintMenuButton/);
+assert.match(historyCardSrc, /onLongPress/);
+assert.match(detailSrc, /t\("scan.delete"\)/);
+assert.match(detailSrc, /t\("scan.reassign"\)/);
+assert.match(storeSrc2, /remove:/);
+assert.match(storeSrc2, /updateChildId/);
+const topicMigration = readFileSync(join(root, "supabase/migrations/20240827000023_ensure_problem_topic.sql"), "utf8");
+assert.match(topicMigration, /ADD COLUMN IF NOT EXISTS topic TEXT/);
+assert.match(topicMigration, /column_name = 'subject'/);
+pass("プリントの削除・子ども付け替えと topic カラム追加がある");
+
+
+
+const backendSrc = readFileSync(join(root, "src/lib/backend.ts"), "utf8");
+assert.doesNotMatch(backendSrc, /isMockMode\(\)/);
+assert.match(backendSrc, /auth\.mocked/);
+const envSrc = readFileSync(join(root, "src/lib/env.ts"), "utf8");
+assert.match(envSrc, /isBillingMocked/);
+assert.match(envSrc, /shouldMockAuth/);
+const gradeSrc = readFileSync(join(root, "src/features/grading/service.ts"), "utf8");
+assert.match(gradeSrc, /gradeViaEdgeFunction/);
+assert.match(gradeSrc, /shouldUseRemote/);
+assert.doesNotMatch(gradeSrc, /isMockMode/);
+pass("課金モックでも採点は shouldUseRemote で Gemini に送る");
 
 console.log("\nAll scan UI checks passed.");

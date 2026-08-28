@@ -4,6 +4,7 @@ import {
   resolveLeechItem as resolveLeechItemImpl,
 } from "./lib/leech.mjs";
 import type { ReviewQueueItem } from "./select";
+import type { TriageLevel } from "@/src/types/database";
 
 export type LeechAction = "master" | "requeue";
 
@@ -11,10 +12,10 @@ export type CarteSnapshot = {
   foundation_rate: number;
   scan_count?: number;
   problem_count: number;
-  triage_level?: string;
+  triage_level?: TriageLevel | string;
   summary?: string;
-  weak_units: Array<{ unit: string; rate: number; total: number; correct: number }>;
-  strong_units: Array<{ unit: string; rate: number; total?: number; correct?: number }>;
+  weak_units: Array<{ unit: string; rate: number; total: number; correct: number; subject?: string | null }>;
+  strong_units: Array<{ unit: string; rate: number; total?: number; correct?: number; subject?: string | null }>;
   careless_rate?: number;
   recent_rates?: number[];
 };

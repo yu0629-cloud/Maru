@@ -50,7 +50,12 @@ export function chooseAnswerStyle(input) {
   if (subject === "japanese" || /漢字|語句|ひらがな|カタカナ|部首/.test(topic)) return "kanji";
   if (/適性検査|作文|資料読み|200字|400字|論述/.test(topic)) return "essay";
   if (/読解|長文|記述/.test(topic)) return "lined";
-  if (subject === "science" || subject === "social" || /理科|社会|地図|実験|器具/.test(topic)) {
+  if (
+    subject === "science" ||
+    subject === "social" ||
+    subject === "social_studies" ||
+    /理科|社会|地図|実験|器具|science|social studies|history|geography/i.test(topic)
+  ) {
     return "diagram";
   }
   if (/作図|グラフ書き|展開図|立体|コンパス|切断/.test(topic)) return "geometry";

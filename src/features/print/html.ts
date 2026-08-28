@@ -36,12 +36,15 @@ export type PrintProblem = {
   correctAnswer: string;
   parentCoachingTip: string;
   answerStyle?: AnswerStyle;
+  mediaExpired?: boolean;
+  printCropped?: boolean;
 };
 
 export type WorksheetItem = {
   id: string;
   number: number;
   kind: "calc" | "text";
+  layout: "compact" | "wide";
   stem: string;
 };
 
@@ -49,9 +52,31 @@ export type PrintDocumentInput = {
   title?: string;
   childName?: string;
   dateLabel?: string;
+  brand?: string;
+  nameLabel?: string;
+  emptyLabel?: string;
+  htmlLang?: string;
   problems: PrintProblem[];
   includeCheatSheet?: boolean;
   perPage?: number;
+  scope?: "daily" | "all";
+};
+
+export type PrintClipItem = {
+  id: string;
+  number: number;
+  layout: "compact" | "wide";
+  cropBox: { x: number; y: number; width: number; height: number };
+  mask?: { x: number; y: number; width: number; height: number; kind?: string };
+  imageSrc: string;
+  originalImageSrc: string;
+  isBlanked: boolean;
+  cropMode: string;
+  problemType?: string;
+  label: string;
+  questionText?: string;
+  correctAnswer?: string;
+  mediaExpired?: boolean;
 };
 
 export {
@@ -67,16 +92,23 @@ export {
   calcExpressionsOf,
   looksLikeMath,
   extractQuestionText,
+  extractMathExpression,
   formatMathExpression,
   formatProblemStem,
   flattenWorksheetItems,
+  packWorksheetRows,
+  paginateWorksheetRows,
+  paginateWorksheetItems,
   toClipItems,
   packClipRows,
   paginateClipRows,
   layoutKind,
   geminiBBoxToNormalizedBox,
   resolveCropBox,
+  expandPrintCropBox,
+  answerMaskBox,
   WORKSHEET_PER_PAGE,
+  PRINT_ROWS_PER_PAGE,
   PRINT_CSS,
   ANSWER_STYLE_LABELS,
   PROBLEM_TYPE_LABELS,

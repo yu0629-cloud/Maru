@@ -32,3 +32,6 @@ verify_jwt = true
 
 [functions.sync-revenuecat]
 verify_jwt = false
+
+[functions.purge-expired-media]
+verify_jwt = false
