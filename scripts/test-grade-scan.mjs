@@ -98,6 +98,7 @@ const {
   gradeExtractedProblems,
   parseExtractProblems,
   placeholderBBox,
+  answersMatchStrict,
 } = await import(
   pathToFileURL(join(root, "supabase/functions/grade-scan/hybrid-grade.mjs")).href,
 );
@@ -183,6 +184,104 @@ assert.ok(hybrid.problems[1].parent_coaching_tip.length <= 20);
 assert.equal(hybrid.problems[0].parent_coaching_tip, "");
 pass("ハイブリッド採点は計算をプログラム判定し、不正解のみ定型ヒントを返す");
 
+assert.equal(answersMatchStrict("120°", "50°"), false);
+const protractorCopied = gradeExtractedProblems([
+  {
+    problem_index: "④",
+    question_text: "㋐の角度は、( )です。語群: じょうぎ 分度器 アイ イウ アウ 130° 50°",
+    student_answer: "130°",
+    correct_answer: "130°",
+    ground_truth: "130°",
+    type: "math",
+    bbox: [100, 100, 200, 400],
+  },
+]);
+assert.equal(protractorCopied.problems[0].is_correct, false);
+const leverCopied = gradeExtractedProblems([
+  {
+    problem_index: "(3)",
+    question_text: "次の①〜③からすべて選び、番号を書きましょう。",
+    student_answer: "2",
+    correct_answer: "2",
+    ground_truth: "2",
+    type: "text",
+    bbox: [100, 100, 200, 400],
+  },
+]);
+assert.equal(leverCopied.problems[0].is_correct, false);
+const leverOk = gradeExtractedProblems([
+  {
+    problem_index: "(3)",
+    question_text: "次の①〜③からすべて選び、番号を書きましょう。",
+    student_answer: "1,3",
+    correct_answer: "1,3",
+    ground_truth: "1,3",
+    type: "text",
+    bbox: [100, 100, 200, 400],
+  },
+]);
+assert.equal(leverOk.problems[0].is_correct, true);
+const protractorOk = gradeExtractedProblems([
+  {
+    problem_index: "④",
+    question_text: "㋐の角度は、( )です。語群: 130° 50°",
+    student_answer: "50°",
+    correct_answer: "50°",
+    ground_truth: "50°",
+    type: "math",
+    bbox: [100, 100, 200, 400],
+  },
+]);
+assert.equal(protractorOk.problems[0].is_correct, true);
+const protractorFromBankOnPage = gradeExtractedProblems([
+  {
+    problem_index: "①",
+    question_text: "空欄に当てはまる言葉を語群から選ぼう。じょうぎ 分度器 アイ イウ アウ 130° 50°",
+    student_answer: "分度器",
+    correct_answer: "分度器",
+    ground_truth: "分度器",
+    type: "text",
+    bbox: [100, 100, 200, 400],
+  },
+  {
+    problem_index: "④",
+    question_text: "㋐の角度は、( )です。",
+    student_answer: "130°",
+    correct_answer: "130°",
+    ground_truth: "130°",
+    type: "math",
+    bbox: [100, 100, 200, 400],
+  },
+]);
+assert.equal(protractorFromBankOnPage.problems[1].is_correct, false);
+assert.equal(answersMatchStrict("50度", "50°"), true);
+assert.equal(answersMatchStrict("ア、イ", "ア、イ、ウ"), false);
+assert.equal(answersMatchStrict("ア、イ、ウ", "ア、イ、ウ"), true);
+const angleGraded = gradeExtractedProblems([
+  {
+    problem_index: "4",
+    question_text: "④ あの角度は、( )です。",
+    student_answer: "120°",
+    correct_answer: "50°",
+    ground_truth: "50°",
+    type: "math",
+  },
+]);
+assert.equal(angleGraded.problems[0].is_correct, false);
+assert.equal(angleGraded.problems[0].correct_answer, "50°");
+const copiedTruth = gradeExtractedProblems([
+  {
+    problem_index: "4",
+    question_text: "④ あの角度は、( )です。",
+    student_answer: "120°",
+    correct_answer: "120°",
+    ground_truth: "50°",
+    type: "math",
+  },
+]);
+assert.equal(copiedTruth.problems[0].is_correct, false);
+pass("図の真の正解と手書きが違えば不正解。一部選択も不正解");
+
 const aliasExtracted = parseExtractProblems({
   questions: [
     {
@@ -240,7 +339,11 @@ const schemaBlock = schemaSrc.slice(schemaSrc.indexOf("GRADE_RESPONSE_SCHEMA"), 
 assert.match(schemaSrc, /GEMINI_MODEL = "gemini-3\.5-flash-lite"/);
 assert.match(schemaBlock, /enum: \["math", "text"\]/);
 assert.match(schemaBlock, /bbox/);
-assert.match(schemaBlock, /"problem_index", "question_text", "student_answer", "correct_answer", "type", "topic", "bbox"/);
+assert.match(schemaBlock, /ground_truth/);
+assert.match(schemaBlock, /"is_correct"/);
+assert.match(schemaBlock, /visual_type/);
+assert.match(schemaBlock, /has_figure/);
+assert.match(schemaBlock, /crop_box/);
 assert.doesNotMatch(schemaBlock, /difficulty_level/);
 assert.doesNotMatch(schemaBlock, /mistake_type/);
 assert.doesNotMatch(schemaBlock, /needs_inpaint/);
@@ -263,7 +366,14 @@ assert.doesNotMatch(geminiSrc, /x-goog-api-key/);
 pass("Gemini 呼び出しが REST 直叩き・既定は 3.5 flash-lite");
 
 const promptSrc = readFileSync(join(root, "supabase/functions/grade-scan/prompt.ts"), "utf8");
-assert.match(promptSrc, /problem_index, question_text, student_answer, correct_answer, type, topic, bbox/);
+assert.match(promptSrc, /problem_index, question_text, ground_truth, student_answer, is_correct, correct_answer, type, topic, bbox, visual_type, crop_box/);
+assert.match(promptSrc, /has_figure/);
+assert.match(promptSrc, /crop_box/);
+assert.match(promptSrc, /ground_truth/);
+assert.match(promptSrc, /Step 1/);
+assert.match(promptSrc, /目盛り/);
+assert.match(promptSrc, /語群/);
+assert.match(promptSrc, /すべて選べ/);
 assert.match(promptSrc, /1問=1件/);
 assert.match(promptSrc, /2 \+ 6 =/);
 assert.match(promptSrc, /解答欄/);
@@ -273,7 +383,10 @@ assert.match(promptSrc, /手書き/);
 assert.match(promptSrc, /等号/);
 assert.match(promptSrc, /薄い鉛筆/);
 assert.match(promptSrc, /雪だるま/);
-assert.match(promptSrc, /採点・思考・解説は禁止/);
+assert.match(promptSrc, /ground_truth に手書きをコピーするな/);
+assert.match(promptSrc, /130°/);
+assert.match(promptSrc, /1,3/);
+assert.doesNotMatch(promptSrc, /採点・思考・解説は禁止/);
 assert.match(promptSrc, /0 \+ 7 =/);
 assert.match(schemaBlock, /Answer slot immediately to the right/);
 assert.match(schemaBlock, /NEVER only a question number/);
@@ -285,7 +398,7 @@ assert.match(promptSrc, /problem_index: "16"/);
 assert.match(promptSrc, /問題番号だけ/);
 assert.doesNotMatch(promptSrc, /calc_block としてまとめ/);
 assert.doesNotMatch(promptSrc, /parent_coaching_tip は不正解/);
-pass("システムプロンプトが抽出のみを指示し採点を禁止する");
+pass("システムプロンプトが ground_truth 導出と厳密比較を指示する");
 
 const { resolveScanSubject, normalizeSubject, DEFAULT_SUBJECT, SUBJECT_CODES } = await import(
   pathToFileURL(join(root, "supabase/functions/grade-scan/subject.mjs")).href,
@@ -344,7 +457,7 @@ assert.match(promptSrc, /アルファベット/);
 assert.match(promptSrc, /迷ったら other/);
 assert.match(promptSrc, /topic は必須/);
 assert.match(promptSrc, /くり上がりのある足し算/);
-assert.match(schemaBlock, /required: \["problem_index".*"topic", "bbox"\]/s);
+assert.match(schemaBlock, /required: \[[\s\S]*"ground_truth"[\s\S]*"is_correct"[\s\S]*"crop_box"/);
 assert.match(
   readFileSync(join(root, "supabase/functions/grade-scan/persist.ts"), "utf8"),
   /resolveScanSubject/,

@@ -48,6 +48,11 @@ export function printProblemFromReview(item?: object | null): {
   parentCoachingTip: string;
   bbox?: unknown;
   cropBox?: unknown;
+  visualType?: string;
+  figureCropBox?: unknown;
+  figureImageSrc?: string;
+  figureBase64?: string;
+  passageText?: string;
   blankedPath: string;
   croppedPath: string;
   originalPath: string;

@@ -1,6 +1,6 @@
-import type { DifficultyLevel, MistakeType, ProblemType, SubjectCode } from "./database";
+import type { DifficultyLevel, MistakeType, ProblemType, SubjectCode, VisualType } from "./database";
 
-export type { DifficultyLevel, MistakeType, ProblemType, SubjectCode };
+export type { DifficultyLevel, MistakeType, ProblemType, SubjectCode, VisualType };
 export type GeminiBBox = [ymin: number, xmin: number, ymax: number, xmax: number];
 
 export type OverallScore = {
@@ -21,6 +21,9 @@ export type GradeProblem = {
   parent_coaching_tip: string;
   needs_inpaint: boolean;
   problem_type: ProblemType;
+  visual_type?: VisualType;
+  crop_box?: GeminiBBox | null;
+  passage_text?: string;
 };
 
 export type GradeResult = {

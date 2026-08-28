@@ -20,6 +20,8 @@ export const MOCK_GRADE_RESULT: GradeResult = {
       parent_coaching_tip: "九九は安定しています。「この調子で、次の繰り下がりも同じ丁寧さでいこう」",
       needs_inpaint: false,
       problem_type: "calc_block",
+      visual_type: "text_only",
+      crop_box: [80, 60, 260, 500],
     },
     {
       problem_index: "大問1 (2)",
@@ -35,6 +37,8 @@ export const MOCK_GRADE_RESULT: GradeResult = {
         "十の位から借りる意識が抜けています。「怒らないよ。52の2から8は引けないね。隣から1借りて12にしてみよう」",
       needs_inpaint: true,
       problem_type: "calc_block",
+      visual_type: "text_only",
+      crop_box: [270, 60, 460, 500],
     },
     {
       problem_index: "大問2",
@@ -49,6 +53,8 @@ export const MOCK_GRADE_RESULT: GradeResult = {
       parent_coaching_tip: "全部かめにしたら足は何本？ そこから一緒に戻そう。",
       needs_inpaint: true,
       problem_type: "standard",
+      visual_type: "text_only",
+      crop_box: [480, 60, 820, 940],
     },
     {
       problem_index: "大問3",
@@ -63,6 +69,8 @@ export const MOCK_GRADE_RESULT: GradeResult = {
       parent_coaching_tip: "今日は図に線を1本だけ書いてみよう。",
       needs_inpaint: false,
       problem_type: "math_geometry_graph",
+      visual_type: "has_figure",
+      crop_box: [830, 40, 980, 700],
     },
   ],
 };
@@ -89,6 +97,9 @@ export function gradeResultToView(result: GradeResult, scanId: string): GradedPr
     imageSrc: IMAGE_BY_TOPIC[problem.topic_tag] ?? MOCK_PRINT_PROBLEMS[0].imageSrc ?? "",
     needs_inpaint: problem.needs_inpaint,
     problem_type: problem.problem_type,
+    visual_type: problem.visual_type,
+    crop_box: problem.crop_box,
+    passage_text: problem.passage_text,
     bbox: problem.bbox,
   }));
 }

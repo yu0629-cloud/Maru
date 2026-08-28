@@ -26,6 +26,10 @@ const {
   layoutKind,
   geminiBBoxToNormalizedBox,
   expandPrintCropBox,
+  figureAnswerMasks,
+  shrinkCropExcludingAnswer,
+  coerceGeminiBox,
+  geminiBoxToPixelCrop,
 } = await import(pathToFileURL(printLib).href);
 const { applyReviewResult, isolateLeeches, selectDailyReviews } = await import(
   pathToFileURL(reviewLib).href
@@ -53,6 +57,16 @@ assert.equal(layoutKind({ problemType: "calc_block" }, compactBox), "compact");
 assert.equal(layoutKind({ problemType: "math_geometry_graph" }, compactBox), "wide");
 assert.equal(layoutKind({ problemType: "reading_passage" }, { x: 0.05, y: 0.2, width: 0.9, height: 0.58 }), "wide");
 pass("短い計算は2列、図形・長文は1列にする");
+
+const figureCrop = { x: 0.05, y: 0.1, width: 0.9, height: 0.5 };
+const rightAnswer = { x: 0.78, y: 0.42, width: 0.14, height: 0.12 };
+const shrunkFigure = shrinkCropExcludingAnswer(figureCrop, rightAnswer);
+assert.ok(shrunkFigure.width < figureCrop.width);
+assert.ok(shrunkFigure.x + shrunkFigure.width <= rightAnswer.x + 0.01);
+const masked = figureAnswerMasks([100, 50, 600, 950], [420, 780, 540, 920]);
+assert.ok(masked.crop);
+assert.ok(Array.isArray(masked.masks));
+pass("図の切り抜きから右下の解答欄を除外する");
 
 const thinAnswer = geminiBBoxToNormalizedBox([170, 119, 213, 513]);
 assert.ok(thinAnswer.height < 0.05);
@@ -126,12 +140,11 @@ assert.match(html, /なまえ: はると/);
 assert.match(html, /2026年8月26日/);
 assert.doesNotMatch(html, /日付<span class="line"/);
 assert.match(html, /answer-box/);
-assert.match(html, /font-size:\s*22px/);
+assert.match(html, /font-size:\s*16px/);
 assert.match(html, /width:\s*60px/);
 assert.match(html, /height:\s*35px/);
-assert.match(html, /display:\s*inline-block/);
 assert.match(html, /page-break-inside: avoid/);
-assert.match(html, /white-space:\s*nowrap/);
+assert.match(html, /white-space:\s*normal/);
 assert.match(html, /flex-direction:\s*row/);
 assert.doesNotMatch(html, /height:\s*297mm/);
 assert.doesNotMatch(html, /<img/);
@@ -248,7 +261,7 @@ assert.match(latexHtml, /5 \+ 4/);
 assert.doesNotMatch(latexHtml, /\$/);
 assert.doesNotMatch(latexHtml, />14</);
 assert.match(latexHtml, /width:\s*60px/);
-assert.match(latexHtml, /display:\s*inline-block/);
+assert.match(latexHtml, /answer-box/);
 pass("番号だけの残骸を除外し、LaTeX の $ を描画前に除去する");
 
 const manyWrong = Array.from({ length: 8 }, (_, index) => ({
@@ -379,6 +392,165 @@ const emptyHtml = buildPrintHtml({ title: "空", childName: "はると", dateLab
 assert.match(emptyHtml, /間違えた問題はまだありません/);
 pass("不正解が無いときは空メッセージを出す");
 
+const FIGURE_PNG =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+const { inferVisualType, figureCropBoxOf } = await import(pathToFileURL(join(root, "src/features/print/lib/visual.mjs")).href);
+assert.equal(inferVisualType({ visualType: "has_figure" }), "has_figure");
+assert.equal(inferVisualType({ problemType: "calc_block" }), "text_only");
+assert.equal(inferVisualType({ problemType: "math_geometry_graph" }), "has_figure");
+assert.equal(inferVisualType({ problemType: "reading_passage" }), "passage_based");
+assert.deepEqual(figureCropBoxOf({ crop_box: [10, 20, 30, 40] }), [10, 20, 30, 40]);
+assert.deepEqual(figureCropBoxOf({ crop_box: "[50,60,70,80]" }), [50, 60, 70, 80]);
+assert.deepEqual(figureCropBoxOf({ crop_box: { 0: 1, 1: 2, 2: 3, 3: 4 } }), [1, 2, 3, 4]);
+assert.deepEqual(coerceGeminiBox({ ymin: 100, xmin: 50, ymax: 400, xmax: 800 }), [100, 50, 400, 800]);
+const pixel = geminiBoxToPixelCrop([0, 0, 500, 1000], 200, 400);
+assert.ok(pixel);
+assert.equal(pixel.originX, 0);
+assert.equal(pixel.originY, 0);
+assert.equal(pixel.width, 200);
+assert.equal(pixel.height, 200);
+const half = geminiBoxToPixelCrop([250, 250, 750, 750], 1000, 1000);
+assert.ok(half);
+assert.equal(half.originX, 250);
+assert.equal(half.originY, 250);
+assert.equal(half.width, 500);
+assert.equal(half.height, 500);
+pass("crop_box の JSON 文字列・正規化座標をピクセルに変換する");
+const { printProblemFromReview } = await import(pathToFileURL(join(root, "src/features/print/lib/from-reviews.mjs")).href);
+const fromJsonCrop = printProblemFromReview({
+  id: "json-crop",
+  label: "図",
+  visualType: "has_figure",
+  problemType: "math_geometry_graph",
+  crop_box: "[100,50,400,900]",
+  questionText: "角度を求めなさい",
+  correctAnswer: "50",
+  parentCoachingTip: "",
+  isCorrect: false,
+});
+assert.deepEqual(fromJsonCrop.figureCropBox, [100, 50, 400, 900]);
+assert.equal(fromJsonCrop.visualType, "has_figure");
+pass("JSON 文字列の crop_box をお直し問題に載せる");
+const figureHtml = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月28日",
+  problems: [
+    {
+      id: "clock",
+      label: "時計",
+      topicTag: "時計",
+      visualType: "has_figure",
+      problemType: "math_geometry_graph",
+      figureImageSrc: FIGURE_PNG,
+      questionText: "何時何分ですか",
+      isCorrect: false,
+      correctAnswer: "3時20分",
+      parentCoachingTip: "",
+    },
+  ],
+});
+assert.match(figureHtml, /<img/);
+assert.match(figureHtml, /data:image/);
+assert.doesNotMatch(figureHtml, /file:/);
+const fromBase64Only = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月28日",
+  problems: [
+    {
+      id: "b64",
+      label: "図",
+      topicTag: "図形",
+      visualType: "has_figure",
+      problemType: "math_geometry_graph",
+      figureBase64: FIGURE_PNG,
+      questionText: "これは出さない",
+      isCorrect: false,
+      correctAnswer: "1",
+      parentCoachingTip: "",
+    },
+  ],
+});
+assert.match(fromBase64Only, /<img src="data:image/);
+assert.doesNotMatch(fromBase64Only, /これは出さない/);
+assert.match(figureHtml, /object-fit:\s*contain/);
+assert.match(figureHtml, /max-height:\s*80mm/);
+assert.match(figureHtml, /answer-frame/);
+assert.doesNotMatch(figureHtml, /figure-work/);
+assert.doesNotMatch(figureHtml, /何時何分ですか/);
+assert.equal((figureHtml.match(/class="answer-frame"/g) ?? []).length, 1);
+assert.doesNotMatch(figureHtml, /class="answer-box"/);
+const figureMasked = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月28日",
+  problems: [
+    {
+      id: "lever",
+      label: "(3)",
+      topicTag: "てこ",
+      visualType: "has_figure",
+      problemType: "science_social_diagram",
+      figureImageSrc: FIGURE_PNG,
+      figureCropBox: [0, 0, 1000, 1000],
+      bbox: [100, 100, 900, 900],
+      questionText: "すべて選び",
+      isCorrect: false,
+      correctAnswer: "1,3",
+      parentCoachingTip: "",
+    },
+  ],
+});
+assert.match(figureMasked, /figure-mask/);
+assert.doesNotMatch(figureMasked, /すべて選び/);
+const figureFallback = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月28日",
+  problems: [
+    {
+      id: "g",
+      label: "大問3",
+      topicTag: "立体切断",
+      visualType: "has_figure",
+      problemType: "math_geometry_graph",
+      questionText: "切り口はどんな形ですか",
+      isCorrect: false,
+      correctAnswer: "正六角形",
+      parentCoachingTip: "",
+    },
+  ],
+});
+assert.doesNotMatch(figureFallback, /<img/);
+assert.match(figureFallback, /切り口はどんな形ですか/);
+assert.match(figureFallback, /answer-box/);
+const passageHtml = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月28日",
+  problems: [
+    {
+      id: "read",
+      label: "読解",
+      topicTag: "長文読解",
+      visualType: "passage_based",
+      problemType: "reading_passage",
+      passageText: "雨が三日続いたので、川の水かさが増えた。",
+      questionText: "水かさが増えた理由は？",
+      isCorrect: false,
+      correctAnswer: "雨が続いたから",
+      parentCoachingTip: "",
+    },
+  ],
+});
+assert.match(passageHtml, /passage-block/);
+assert.match(passageHtml, /雨が三日続いた/);
+assert.match(passageHtml, /水かさが増えた理由/);
+assert.doesNotMatch(passageHtml, /<img/);
+assert.match(passageHtml, /answer-box/);
+pass("図形は切り抜き画像、欠けたらテキスト、長文は本文＋設問で印字する");
+
 const outDir = join(root, "scripts/output");
 mkdirSync(outDir, { recursive: true });
 writeFileSync(join(outDir, "print-preview.html"), html, "utf8");
@@ -396,8 +568,12 @@ assert.doesNotMatch(previewScreen, /切り抜きです/);
 const previewSheets = readFileSync(join(root, "src/features/print/PreviewSheets.tsx"), "utf8");
 assert.match(previewSheets, /flattenWorksheetItems/);
 assert.match(previewSheets, /width: 60/);
+assert.match(previewSheets, /fontSize: 16/);
 assert.match(previewSheets, /sanitizeStem/);
+assert.match(previewSheets, /FigureAnswerFrame/);
+assert.doesNotMatch(previewSheets, /fontSize: 22/);
 assert.doesNotMatch(previewSheets, /CroppedImage/);
+assert.doesNotMatch(previewSheets, /borderStyle: "dashed"/);
 const printScreen = readFileSync(join(root, "app/(app)/print/index.tsx"), "utf8");
 assert.doesNotMatch(printScreen, /保護者カンペシート/);
 assert.match(printScreen, /t\("print\.subtitle"\)/);
@@ -419,6 +595,15 @@ assert.match(printStore, /excludedIds/);
 const printHook = readFileSync(join(root, "src/features/print/usePrintDocument.ts"), "utf8");
 assert.match(printHook, /excluded\.has/);
 assert.match(printHook, /candidates/);
+assert.match(printHook, /resolvePrintImageUrls/);
+const scanImageSrc = readFileSync(join(root, "src/lib/files/scan-image.ts"), "utf8");
+assert.match(scanImageSrc, /FIGURE_CACHE_VERSION = 2/);
+assert.match(scanImageSrc, /isRawScanSourceUri/);
+assert.match(scanImageSrc, /cropFigureToBase64/);
+assert.match(scanImageSrc, /ensureLocalImageFile/);
+assert.match(scanImageSrc, /base64:\s*true/);
+assert.match(scanImageSrc, /data:image\/jpeg;base64/);
+assert.doesNotMatch(scanImageSrc, /if \(problem.figureImageSrc\) return problem/);
 const printService = readFileSync(join(root, "src/features/print/service.ts"), "utf8");
 assert.match(printService, /printToFileAsync/);
 assert.match(printService, /width:/);
@@ -428,6 +613,14 @@ assert.match(printService, /is_correct\.eq\.false/);
 assert.match(printService, /mistake_type\.eq\.blank/);
 assert.match(printService, /isIncorrectForPrint/);
 assert.match(printService, /question_text/);
+assert.match(printService, /isRawScanSourceUri/);
+assert.match(printService, /figureBase64/);
+assert.match(printService, /data:image/);
+assert.match(printService, /cropFigureToBase64/);
+assert.match(printService, /resolvePrintImageUrls\(input.problems\)/);
+const gradeServiceSrc = readFileSync(join(root, "src/features/grading/service.ts"), "utf8");
+assert.match(gradeServiceSrc, /answerBBox/);
+assert.doesNotMatch(gradeServiceSrc, /if \(problem.figureImageSrc\) return problem/);
 const reviewFetch = readFileSync(join(root, "src/features/review/useDailyReviews.ts"), "utf8");
 assert.match(reviewFetch, /question_text/);
 assert.match(reviewFetch, /displayQuestionText\(problem\?\.question_text/);

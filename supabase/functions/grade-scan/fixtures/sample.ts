@@ -43,6 +43,8 @@ export const SAMPLE_GRADE_RESULT: GradeResult = {
       parent_coaching_tip: "九九は安定しています。「この調子で、次の繰り下がりも同じ丁寧さでいこう」と一声かけてください。",
       needs_inpaint: false,
       problem_type: "calc_block",
+      visual_type: "text_only",
+      crop_box: [80, 60, 260, 500],
     },
     {
       problem_index: "大問1 (2)",
@@ -58,6 +60,8 @@ export const SAMPLE_GRADE_RESULT: GradeResult = {
         "カルテでも苦手な繰り下がりです。十の位から借りる意識が抜けています。「怒らないよ。52の2から8は引けないね。隣から1借りて12にしてみよう」と、指で十の位をトントンしながら聞いてください。",
       needs_inpaint: true,
       problem_type: "calc_block",
+      visual_type: "text_only",
+      crop_box: [270, 60, 460, 500],
     },
     {
       problem_index: "大問2",
@@ -74,6 +78,8 @@ export const SAMPLE_GRADE_RESULT: GradeResult = {
         "つるかめ算が最優先の穴です。式の意味より「全部かめにしたら足が何本余るか」が見えていません。「答えを急がなくていいよ。まず全部かめだったら足は何本？ そこから一緒に戻そう」と促してください。",
       needs_inpaint: true,
       problem_type: "standard",
+      visual_type: "text_only",
+      crop_box: [480, 60, 820, 940],
     },
     {
       problem_index: "大問3",
@@ -89,6 +95,8 @@ export const SAMPLE_GRADE_RESULT: GradeResult = {
         "手つかずです。難問なので責めず、「今日は図に線を1本だけ書いてみよう。切った面が何角形に見える？」と入口だけ作ってあげてください。",
       needs_inpaint: false,
       problem_type: "math_geometry_graph",
+      visual_type: "has_figure",
+      crop_box: [830, 40, 980, 700],
     },
   ],
 };

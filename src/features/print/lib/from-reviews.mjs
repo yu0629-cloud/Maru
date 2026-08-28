@@ -1,5 +1,7 @@
 /** 採点・復習キューからお直しプリント用の不正解・空欄問題を集める */
 
+import { figureCropBoxOf, figureDataSrcOf, figureImageSrcOf, inferVisualType, passageTextOf } from "./visual.mjs";
+
 export function isBlankPrintAnswer(item) {
   const status = String(item?.status ?? item?.answer_status ?? item?.answerStatus ?? "").toLowerCase();
   if (status === "unanswered" || status === "blank") return true;
@@ -76,6 +78,11 @@ export function printProblemFromReview(item) {
     parentCoachingTip: item?.parentCoachingTip || item?.parent_coaching_tip || "",
     bbox: item?.bbox,
     cropBox: item?.cropBox || item?.bounding_box,
+    visualType: inferVisualType(item),
+    figureCropBox: figureCropBoxOf(item),
+    figureImageSrc: expired ? "" : figureImageSrcOf(item),
+    figureBase64: expired ? "" : String(item?.figureBase64 ?? item?.figure_base64 ?? "").trim(),
+    passageText: passageTextOf(item),
     blankedPath: expired ? "" : item?.blankedPath || "",
     croppedPath: expired ? "" : item?.croppedPath || "",
     originalPath: expired ? "" : item?.originalPath || "",
@@ -113,6 +120,11 @@ export function printProblemsFromScans(scans, childId) {
           parentCoachingTip: problem.parent_coaching_tip,
           bbox: problem.bbox,
           cropBox: problem.bounding_box,
+          visualType: problem.visual_type || problem.visualType,
+          figureCropBox: problem.crop_box || problem.figureCropBox,
+          figureImageSrc: problem.figureImageSrc,
+          figureBase64: problem.figureBase64,
+          passageText: problem.passage_text || problem.passageText,
           imageSrc: problem.imageSrc,
           localUri: scan.localUri,
           originalPath: scan.originalStoragePath,
@@ -138,6 +150,9 @@ export const DAILY_PRINT_MAX = 5;
 
 export function hasPrintableQuestion(item) {
   if (questionTextOf(item)) return true;
+  const visual = inferVisualType(item);
+  if (visual === "has_figure" && (figureDataSrcOf(item) || figureImageSrcOf(item) || figureCropBoxOf(item))) return true;
+  if (visual === "passage_based" && passageTextOf(item)) return true;
   const answer = stripLatexDollars(item?.correctAnswer ?? item?.correct_answer ?? "");
   return /[0-9０-９]+(?:\s*[+\-×÷＋−*/]\s*[0-9０-９]+)+/.test(answer);
 }

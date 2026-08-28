@@ -1,4 +1,5 @@
 import { recountScore, type GradedProblemView } from "@/src/features/grading/corrections";
+import { inferVisualType } from "@/src/features/print/lib/visual.mjs";
 import { isUuid, shouldUseRemote } from "@/src/lib/backend";
 import { STORAGE_BUCKETS } from "@/src/lib/storage/paths";
 import { signedStorageUrl } from "@/src/lib/storage/signed-url";
@@ -33,6 +34,9 @@ type HydratedProblemRow = Pick<
   | "topic_tags"
   | "needs_inpaint"
   | "problem_type"
+  | "visual_type"
+  | "crop_box"
+  | "passage_text"
   | "gemini_bbox"
   | "cropped_storage_path"
   | "blanked_storage_path"
@@ -43,7 +47,7 @@ function asRows<T>(data: unknown): T[] {
 }
 
 const PROBLEM_SELECT =
-  "id, scan_id, problem_index, problem_label, question_text, is_correct, mistake_type, parent_coaching_tip, student_answer, correct_answer, unit, topic, topic_tags, needs_inpaint, problem_type, gemini_bbox, cropped_storage_path, blanked_storage_path";
+  "id, scan_id, problem_index, problem_label, question_text, is_correct, mistake_type, parent_coaching_tip, student_answer, correct_answer, unit, topic, topic_tags, needs_inpaint, problem_type, visual_type, crop_box, passage_text, gemini_bbox, cropped_storage_path, blanked_storage_path";
 
 function mapScanStatus(status: ScanStatus): ScanRecord["status"] {
   if (status === "failed") return "failed";
@@ -68,6 +72,13 @@ function mapProblem(row: HydratedProblemRow, imageSrc = ""): GradedProblemView {
     imageSrc,
     needs_inpaint: row.needs_inpaint,
     problem_type: row.problem_type,
+    visual_type: row.visual_type ?? inferVisualType({
+      problemType: row.problem_type,
+      questionText: row.question_text,
+      topicTag: row.topic ?? row.unit,
+    }),
+    crop_box: row.crop_box ?? undefined,
+    passage_text: row.passage_text ?? "",
     bbox: row.gemini_bbox ?? undefined,
   };
 }
@@ -122,10 +133,12 @@ async function fetchProblemsForScans(scanIds: string[]) {
     .in("scan_id", scanIds)
     .order("problem_index", { ascending: true });
   if (!withTopic.error) return asRows<HydratedProblemRow>(withTopic.data);
-  const missingTopic =
-    withTopic.error.code === "42703" || /problems\.topic does not exist/i.test(withTopic.error.message ?? "");
-  if (!missingTopic) throw withTopic.error;
-  const fallbackSelect = PROBLEM_SELECT.replace(", topic,", ",");
+  const missingColumn =
+    withTopic.error.code === "42703" ||
+    /problems\.(topic|visual_type|crop_box|passage_text) does not exist/i.test(withTopic.error.message ?? "");
+  if (!missingColumn) throw withTopic.error;
+  const fallbackSelect = PROBLEM_SELECT.replace(", topic,", ",")
+    .replace(", visual_type, crop_box, passage_text,", ",");
   const { data, error } = await supabase
     .from("problems")
     .select(fallbackSelect)

@@ -2,7 +2,8 @@ import { shouldUseRemote } from "@/src/lib/backend";
 import { maruLog, maruStep } from "@/src/lib/debug/maruLog";
 import { isExpoGo } from "@/src/lib/env";
 import { withTimeout } from "@/src/lib/async/timeout";
-import { compressScanForGrade, persistScanImage, toFileUri } from "@/src/lib/files/scan-image";
+import { compressScanForGrade, persistScanImage, toFileUri, cropFigureToBase64 } from "@/src/lib/files/scan-image";
+import { coerceGeminiBox, inferVisualType } from "@/src/features/print/lib/visual.mjs";
 import { uploadCompressedScan } from "@/src/lib/storage/upload-scan";
 import { getMemoryAccessToken } from "@/src/lib/supabase/access-token";
 import { supabase } from "@/src/lib/supabase/client";
@@ -38,7 +39,7 @@ async function mockGrade(input: { uri: string; childId: string }): Promise<ScanR
     problems,
   };
   useScanStore.getState().upsert(scan);
-  return scan;
+  return attachFigureCrops(scan);
 }
 
 function recordFromGradeResult(input: {
@@ -66,6 +67,29 @@ function recordFromGradeResult(input: {
   };
   useScanStore.getState().upsert(scan);
   return scan;
+}
+
+async function attachFigureCrops(scan: ScanRecord): Promise<ScanRecord> {
+  if (!scan.localUri || scan.localUri.startsWith("mock")) return scan;
+  const problems = await Promise.all(
+    scan.problems.map(async (problem) => {
+      const visual = inferVisualType(problem);
+      if (visual !== "has_figure") return problem;
+      const cropBox = coerceGeminiBox(problem.crop_box) ?? coerceGeminiBox(problem.bbox) ?? [0, 0, 1000, 1000];
+      const figureBase64 = await cropFigureToBase64({
+        sourceUri: scan.localUri as string,
+        cropBox,
+        scanId: scan.id,
+        problemId: problem.id,
+        answerBBox: problem.bbox ?? null,
+        visualType: visual,
+      });
+      return figureBase64 ? { ...problem, figureImageSrc: figureBase64, figureBase64 } : problem;
+    }),
+  );
+  const next = { ...scan, problems };
+  useScanStore.getState().upsert(next);
+  return next;
 }
 
 function mapGradeScanError(status: number, payload: { error?: string; message?: string } | null) {
@@ -188,13 +212,15 @@ async function gradeViaEdgeFunction(input: {
     throw new Error(payload.message ?? payload.error ?? "丸付けに失敗しました");
   }
 
-  return recordFromGradeResult({
-    scanId: payload.scanId ?? `scan-${Date.now()}`,
-    childId: input.childId,
-    localUri: compressed.uri,
-    originalStoragePath: uploaded.storagePath,
-    result: { subject: payload.subject, overall_score: payload.overall_score, problems: payload.problems },
-  });
+  return attachFigureCrops(
+    recordFromGradeResult({
+      scanId: payload.scanId ?? `scan-${Date.now()}`,
+      childId: input.childId,
+      localUri: compressed.uri,
+      originalStoragePath: uploaded.storagePath,
+      result: { subject: payload.subject, overall_score: payload.overall_score, problems: payload.problems },
+    }),
+  );
 }
 
 export async function runGradePipeline(

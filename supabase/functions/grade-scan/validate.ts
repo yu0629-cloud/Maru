@@ -13,9 +13,15 @@ import {
   isProblemType,
   mergeCalcBlocks,
 } from "./problem-types.ts";
-import { gradeFromGeminiPayload, isQuestionNumberOnly } from "./hybrid-grade.ts";
+import {
+  answersMatchStrict,
+  applyCopiedAnswerGuards,
+  gradeFromGeminiPayload,
+  isQuestionNumberOnly,
+} from "./hybrid-grade.ts";
 import { parseJsonPayload } from "./parse-json.mjs";
 import { resolveScanSubject } from "./subject.ts";
+import { inferVisualType, isVisualType, type VisualType } from "./visual.ts";
 
 export class GradeValidationError extends Error {
   constructor(message: string) {
@@ -96,14 +102,32 @@ export function normalizeProblem(raw: unknown, index: number): GradeProblem {
     throw new GradeValidationError(`${path}.bbox の範囲が不正です`);
   }
 
-  const isCorrect = asBoolean(obj.is_correct, `${path}.is_correct`);
   const studentAnswer = asString(obj.student_answer, `${path}.student_answer`);
   const topicTag = optionalString(obj.topic_tag) ?? optionalString(obj.topic) ?? "未分類";
   const problemIndex = asString(obj.problem_index, `${path}.problem_index`) || `問${index + 1}`;
-  const correctAnswer = asString(obj.correct_answer, `${path}.correct_answer`);
+  const groundTruth = optionalString(obj.ground_truth);
+  const correctAnswer =
+    groundTruth || asString(obj.correct_answer, `${path}.correct_answer`);
   const questionTextRaw =
     optionalString(obj.question_text) ?? optionalString(obj.questionText) ?? optionalString(obj.prompt) ?? "";
   const questionText = isQuestionNumberOnly(questionTextRaw) ? "" : questionTextRaw;
+
+  let isCorrect = asBoolean(obj.is_correct, `${path}.is_correct`);
+  if (groundTruth && !answersMatchStrict(studentAnswer, groundTruth)) {
+    isCorrect = false;
+  }
+  isCorrect = applyCopiedAnswerGuards(
+    {
+      question_text: questionText,
+      topic: topicTag,
+      student_answer: studentAnswer,
+      ground_truth: groundTruth || correctAnswer,
+      correct_answer: correctAnswer,
+      passage_text: optionalString(obj.passage_text) ?? "",
+      word_bank: optionalString(obj.word_bank) ?? "",
+    },
+    isCorrect,
+  );
 
   const inferredType = isProblemType(obj.problem_type)
     ? obj.problem_type
@@ -146,6 +170,22 @@ export function normalizeProblem(raw: unknown, index: number): GradeProblem {
     ? parseDifficulty(obj.difficulty_level, `${path}.difficulty_level`)
     : "standard";
 
+  const visualType: VisualType = isVisualType(obj.visual_type)
+    ? (obj.visual_type as VisualType)
+    : inferVisualType({
+        visual_type: obj.visual_type,
+        problem_type: inferredType,
+        question_text: questionText,
+        topic: topicTag,
+      });
+
+  let cropBox: GradeProblem["crop_box"] = null;
+  if (isGeminiBBox(obj.crop_box)) {
+    const normalized = normalizeGeminiBBox(obj.crop_box);
+    const [cropYmin, cropXmin, cropYmax, cropXmax] = normalized;
+    if (cropYmax > cropYmin && cropXmax > cropXmin) cropBox = normalized;
+  }
+
   return {
     problem_index: problemIndex,
     question_text: questionText,
@@ -159,6 +199,9 @@ export function normalizeProblem(raw: unknown, index: number): GradeProblem {
     parent_coaching_tip: enrichCoachingTip(inferredType, tip, isCorrect),
     needs_inpaint: needsInpaint,
     problem_type: inferredType,
+    visual_type: visualType,
+    crop_box: cropBox,
+    passage_text: optionalString(obj.passage_text) ?? "",
   };
 }
 

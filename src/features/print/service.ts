@@ -9,11 +9,15 @@ import { signedStorageUrl } from "@/src/lib/storage/signed-url";
 import { shouldUseRemote } from "@/src/lib/backend";
 import { maruLog, maruStep } from "@/src/lib/debug/maruLog";
 import { t } from "@/src/i18n";
+import { cropFigureToBase64, isRawScanSourceUri, toFileUri } from "@/src/lib/files/scan-image";
 import { isIncorrectForPrint, printProblemFromReview } from "@/src/features/print/from-reviews";
 import {
   buildPrintHtml,
   chooseAnswerStyle,
+  coerceGeminiBox,
   expandPrintCropBox,
+  figureCropBoxOf,
+  inferVisualType,
   resolveCropBox,
   styleToGridType,
 } from "@/src/features/print/html";
@@ -26,15 +30,16 @@ export type GeneratedPrint = {
 
 async function fileToDataUri(uri: string) {
   if (uri.startsWith("data:image/")) return uri;
-  if (!uri.startsWith("file:")) return uri;
+  const local = toFileUri(uri);
   try {
-    const base64 = await FileSystem.readAsStringAsync(uri, {
+    const base64 = await FileSystem.readAsStringAsync(local, {
       encoding: FileSystem.EncodingType.Base64,
     });
-    return `data:image/jpeg;base64,${base64}`;
+    const mime = /\.png$/i.test(local) ? "image/png" : "image/jpeg";
+    return `data:${mime};base64,${base64}`;
   } catch (error) {
     maruLog("print", "fileToDataUri fail", error);
-    return uri;
+    return "";
   }
 }
 
@@ -42,17 +47,29 @@ async function toPrintableImageSrc(uri?: string | null) {
   const value = String(uri ?? "").trim();
   if (!value) return "";
   if (value.startsWith("data:image/")) return value;
-  if (value.startsWith("file:")) return fileToDataUri(value);
   if (/^https?:/i.test(value) && Platform.OS !== "web") {
     try {
       const local = await downloadToCache(value);
       return fileToDataUri(local);
     } catch (error) {
       maruLog("print", "https to data uri fail", error);
-      return value;
+      return "";
     }
   }
-  return value;
+  if (
+    value.startsWith("file:") ||
+    value.startsWith("content:") ||
+    value.startsWith("/") ||
+    value.startsWith("ph://")
+  ) {
+    return fileToDataUri(value);
+  }
+  return "";
+}
+
+function asFigurePayload(dataUri: string) {
+  if (!dataUri.startsWith("data:image/")) return { figureImageSrc: "", figureBase64: "", imageSrc: "" };
+  return { figureImageSrc: dataUri, figureBase64: dataUri, imageSrc: dataUri };
 }
 
 async function downloadToCache(uri: string) {
@@ -99,7 +116,7 @@ export async function fetchIncorrectProblemsForPrint(childId?: string): Promise<
   const { data: problems, error } = await supabase
     .from("problems")
     .select(
-      "id, scan_id, problem_label, question_text, unit, topic_tags, blanked_storage_path, cropped_storage_path, crop_purged_at, blank_purged_at, bounding_box, gemini_bbox, is_correct, student_answer, parent_coaching_tip, correct_answer, subject, problem_type, mistake_type",
+      "id, scan_id, problem_label, question_text, unit, topic_tags, blanked_storage_path, cropped_storage_path, crop_purged_at, blank_purged_at, bounding_box, gemini_bbox, is_correct, student_answer, parent_coaching_tip, correct_answer, subject, problem_type, mistake_type, visual_type, crop_box, passage_text",
     )
     .eq("child_id", childId)
     .or("is_correct.eq.false,is_correct.is.null,mistake_type.eq.blank")
@@ -147,6 +164,10 @@ export async function fetchIncorrectProblemsForPrint(childId?: string): Promise<
       parentCoachingTip: problem.parent_coaching_tip,
       bbox: problem.gemini_bbox ?? undefined,
       cropBox: problem.bounding_box ?? undefined,
+      visualType: problem.visual_type ?? undefined,
+      figureCropBox: problem.crop_box ?? undefined,
+      crop_box: problem.crop_box ?? undefined,
+      passageText: problem.passage_text ?? "",
       blankedPath: blankPath,
       croppedPath: cropPath,
       originalPath,
@@ -185,8 +206,64 @@ export async function resolvePrintImageUrls(problems: PrintProblem[]): Promise<P
         problem.originalPath || problem.originalImageSrc,
       );
       const source = blankedImageSrc || croppedImageSrc || signedOriginal || problem.originalImageSrc || "";
+      const visual = inferVisualType(problem);
+      if (visual === "has_figure") {
+        const geminiCrop = figureCropBoxOf(problem) ?? coerceGeminiBox(problem.bbox) ?? [0, 0, 1000, 1000];
+        const rawSource = [problem.originalImageSrc, signedOriginal, source]
+          .map((uri) => String(uri ?? "").trim())
+          .find((uri) => isRawScanSourceUri(uri));
+        maruLog("figure", "resolvePrintImageUrls", {
+          id: problem.id,
+          visual,
+          visualType: problem.visualType,
+          problemType: problem.problemType,
+          sourceUri: String(rawSource ?? "").slice(0, 120),
+          originalImageSrc: String(problem.originalImageSrc ?? "").slice(0, 80),
+          originalPath: problem.originalPath ?? "",
+          signedOriginal: String(signedOriginal ?? "").slice(0, 80),
+          cropBox: geminiCrop,
+          hasCropBox: Boolean(figureCropBoxOf(problem)),
+        });
+        try {
+          const existing = String(problem.figureBase64 || problem.figureImageSrc || "").trim();
+          let printable = "";
+          if (rawSource) {
+            printable =
+              (await cropFigureToBase64({
+                sourceUri: rawSource,
+                cropBox: geminiCrop,
+                scanId: String(problem.originalPath || problem.id),
+                problemId: String(problem.id),
+                answerBBox: problem.bbox ?? null,
+                visualType: visual,
+              })) ?? "";
+          } else {
+            maruLog("figure", "no source uri — cannot crop", { id: problem.id });
+          }
+          if (!printable.startsWith("data:image/")) {
+            printable = existing.startsWith("data:image/") ? existing : await toPrintableImageSrc(existing);
+          }
+          if (!printable.startsWith("data:image/")) {
+            maruLog("figure", "fallback to text: no figureBase64", { id: problem.id });
+            return { ...problem, ...asFigurePayload("") };
+          }
+          return {
+            ...problem,
+            ...asFigurePayload(printable),
+            originalImageSrc: await toPrintableImageSrc(signedOriginal || problem.originalImageSrc || ""),
+          };
+        } catch (error) {
+          maruLog("figure", "figure crop skip", {
+            id: problem.id,
+            error: error instanceof Error ? error.message : error,
+          });
+          const existing = String(problem.figureBase64 || problem.figureImageSrc || "").trim();
+          const printable = existing.startsWith("data:image/") ? existing : await toPrintableImageSrc(existing);
+          return { ...problem, ...asFigurePayload(printable) };
+        }
+      }
       if (!source) {
-        return { ...problem, imageSrc: "", originalImageSrc: "", printCropped: false };
+        return { ...problem, imageSrc: "", originalImageSrc: "", printCropped: false, figureImageSrc: "" };
       }
       const alreadyCropped = Boolean(blankedImageSrc || croppedImageSrc);
       try {
@@ -226,7 +303,8 @@ const A4_PRINT_OPTIONS = {
 };
 
 export async function generatePrintPdf(input: PrintDocumentInput): Promise<GeneratedPrint> {
-  const html = buildPrintHtml(input);
+  const problems = await resolvePrintImageUrls(input.problems);
+  const html = buildPrintHtml({ ...input, problems });
   if (Platform.OS === "web") {
     return { html };
   }

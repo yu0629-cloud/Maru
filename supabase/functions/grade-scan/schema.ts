@@ -12,9 +12,12 @@ export const PROBLEM_TYPES = [
   "standard",
 ] as const;
 
+export const VISUAL_TYPES = ["text_only", "has_figure", "passage_based"] as const;
+
 export type DifficultyLevel = (typeof DIFFICULTY_LEVELS)[number];
 export type MistakeType = (typeof MISTAKE_TYPES)[number];
 export type ProblemType = (typeof PROBLEM_TYPES)[number];
+export type VisualType = (typeof VISUAL_TYPES)[number];
 export type { SubjectCode };
 export { SUBJECT_CODES };
 
@@ -39,6 +42,9 @@ export type GradeProblem = {
   parent_coaching_tip: string;
   needs_inpaint: boolean;
   problem_type: ProblemType;
+  visual_type: VisualType;
+  crop_box: GeminiBBox | null;
+  passage_text?: string;
 };
 
 export type GradeResult = {
@@ -67,9 +73,12 @@ export type CarteJson = {
 };
 
 /**
- * Gemini に出させる抽出キー。正誤・難易度・声かけ・解説はサーバ側で補う。
- * problem_index は問番号（"3", "16"）。question_text は解く式（"0 + 7 ="）。番号だけは禁止。
+ * Gemini に出させる抽出キー。ground_truth は手書きを見る前に問題・図から導く。
+ * is_correct は ground_truth と student_answer の比較。サーバ側でも再判定する。
+ * problem_index は問番号（"3", "16"）。question_text は解く式や設問文。番号だけは禁止。
  * bbox は「=」のすぐ右の解答欄 [ymin, xmin, ymax, xmax]（各 0〜1000）。式全体ではない。
+ * visual_type は文字だけで解けるか、図が必要か、長文本文が必要か。
+ * crop_box は has_figure のとき、図を含む「解くために必要な最小範囲」（手書き解答欄はなるべく除く）。
  * subject はプリント全体の教科。
  */
 export const GRADE_RESPONSE_SCHEMA = {
@@ -95,15 +104,26 @@ export const GRADE_RESPONSE_SCHEMA = {
           question_text: {
             type: "STRING",
             description:
-              'Printed formula or full stem to solve, e.g. "0 + 7 =", "2 + 6 =", "15 - 8 =", "2 + 4 =". Include "=". NEVER only a question number like "16". Do not include handwriting.',
+              'Printed formula or full stem to solve, e.g. "0 + 7 =", "2 + 6 =", "15 - 8 =", "2 + 4 =", "④ あの角度は、( )です。". Include "=" when printed. NEVER only a question number like "16". Do not include handwriting.',
+          },
+          ground_truth: {
+            type: "STRING",
+            description:
+              "Step1: the true answer YOU derive from the printed problem, figure, protractor marks, and word bank — BEFORE reading handwriting. Example: acute angle on a protractor → 50°. NEVER copy the child's writing. If there is a word bank, pick only from those options.",
           },
           student_answer: {
             type: "STRING",
-            description: "Child's handwritten answer to the right of '='. Not the question number.",
+            description:
+              "Step2: the child's handwritten answer exactly as written (e.g. 120° even if it is not in the word bank). Not the question number. Empty string if blank.",
+          },
+          is_correct: {
+            type: "BOOLEAN",
+            description:
+              "Step3: true only if student_answer matches ground_truth. If they differ, MUST be false. For select-all questions, missing any required choice is false.",
           },
           correct_answer: {
             type: "STRING",
-            description: "Correct answer for the printed formula. Not the question number.",
+            description: "Same value as ground_truth. Never the child's handwriting.",
           },
           type: { type: "STRING", format: "enum", enum: ["math", "text"] },
           topic: {
@@ -119,16 +139,53 @@ export const GRADE_RESPONSE_SCHEMA = {
             maxItems: 4,
             items: { type: "NUMBER" },
           },
+          visual_type: {
+            type: "STRING",
+            format: "enum",
+            enum: ["text_only", "has_figure", "passage_based"],
+            description:
+              "text_only=solvable from printed numbers/letters only (arithmetic, kanji, vocab). has_figure=needs a diagram/graph/clock/illustration/table. passage_based=needs a shared reading passage or dialogue.",
+          },
+          crop_box: {
+            type: "ARRAY",
+            description:
+              "For has_figure: smallest region needed to solve, including the shared parent figure/illustration, excluding the child's handwriting/answer slot as much as possible. [ymin,xmin,ymax,xmax] 0-1000. For text_only, the printed formula/stem only.",
+            minItems: 4,
+            maxItems: 4,
+            items: { type: "NUMBER" },
+          },
+          passage_text: {
+            type: "STRING",
+            description:
+              "Shared passage or dialogue for passage_based items. Empty string if not a reading item. Do not include the question itself.",
+          },
         },
-        required: ["problem_index", "question_text", "student_answer", "correct_answer", "type", "topic", "bbox"],
-        propertyOrdering: [
+        required: [
           "problem_index",
           "question_text",
+          "ground_truth",
           "student_answer",
+          "is_correct",
           "correct_answer",
           "type",
           "topic",
           "bbox",
+          "visual_type",
+          "crop_box",
+        ],
+        propertyOrdering: [
+          "problem_index",
+          "question_text",
+          "ground_truth",
+          "student_answer",
+          "is_correct",
+          "correct_answer",
+          "type",
+          "topic",
+          "bbox",
+          "visual_type",
+          "crop_box",
+          "passage_text",
         ],
       },
     },

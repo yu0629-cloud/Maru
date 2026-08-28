@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { chooseAnswerStyle, type PrintDocumentInput, type PrintProblem } from "@/src/features/print/html";
 import { collectPrintProblems } from "@/src/features/print/from-reviews";
 import { mockPrintDocumentInput } from "@/src/features/print/mock";
-import { fetchIncorrectProblemsForPrint } from "@/src/features/print/service";
+import { fetchIncorrectProblemsForPrint, resolvePrintImageUrls } from "@/src/features/print/service";
 import { useDailyReviews } from "@/src/features/review/useDailyReviews";
 import { useCurrentChild } from "@/src/hooks/useCurrentChild";
 import { useScanStore } from "@/src/stores/scanStore";
@@ -75,11 +75,30 @@ export function usePrintDocument(): PrintDocumentInput & { candidates: PrintProb
   }, [currentChild?.id, daily, extras, items, mocked, scans, scope]);
 
   const excluded = useMemo(() => new Set(excludedIds.map((id) => String(id))), [excludedIds]);
+  const visibleProblems = useMemo(
+    () => candidates.filter((problem) => !excluded.has(String(problem.id))),
+    [candidates, excluded],
+  );
+  const [resolvedProblems, setResolvedProblems] = useState<PrintProblem[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void resolvePrintImageUrls(visibleProblems)
+      .then((next) => {
+        if (!cancelled) setResolvedProblems(next);
+      })
+      .catch(() => {
+        if (!cancelled) setResolvedProblems(visibleProblems);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [visibleProblems]);
 
   return useMemo(() => {
     const now = new Date();
     const fallback = mockPrintDocumentInput();
-    const problems = candidates.filter((problem) => !excluded.has(String(problem.id)));
+    const problems = resolvedProblems ?? visibleProblems;
     const childName = currentChild?.name ?? fallback.childName;
     return {
       ...fallback,
@@ -95,5 +114,5 @@ export function usePrintDocument(): PrintDocumentInput & { candidates: PrintProb
       emptyLabel: t("print.emptySheet"),
       htmlLang: locale,
     };
-  }, [candidates, currentChild?.name, excluded, locale, scope]);
+  }, [candidates, currentChild?.name, locale, resolvedProblems, scope, visibleProblems]);
 }

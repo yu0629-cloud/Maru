@@ -1,7 +1,7 @@
 import { geminiBBoxToNormalizedBox } from "./bbox.ts";
 import { inferSubject, resolveScanSubject, type SubjectCode } from "./subject.ts";
 import { shouldQueueInpaint } from "./validate.ts";
-import type { GradeProblem, GradeResult, ProblemType } from "./schema.ts";
+import type { GradeProblem, GradeResult, ProblemType, VisualType } from "./schema.ts";
 
 export type { SubjectCode };
 export { inferSubject, resolveScanSubject };
@@ -27,6 +27,9 @@ export type ProblemInsert = {
   parent_coaching_tip: string;
   needs_inpaint: boolean;
   problem_type: ProblemType;
+  visual_type: VisualType;
+  crop_box: GradeProblem["bbox"] | null;
+  passage_text: string;
 };
 
 export function toProblemInserts(
@@ -55,6 +58,9 @@ export function toProblemInserts(
     parent_coaching_tip: problem.parent_coaching_tip,
     needs_inpaint: problem.needs_inpaint,
     problem_type: problem.problem_type,
+    visual_type: problem.visual_type,
+    crop_box: problem.crop_box,
+    passage_text: problem.passage_text ?? "",
   }));
 }
 

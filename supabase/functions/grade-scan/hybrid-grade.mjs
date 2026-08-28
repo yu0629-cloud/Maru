@@ -1,4 +1,5 @@
 import { resolveScanSubject } from "./subject.mjs";
+import { inferVisualType } from "./visual.mjs";
 
 export const GRADE_KINDS = ["math", "text"];
 
@@ -100,6 +101,116 @@ export function parseNumberToken(value) {
   if (!match) return null;
   const n = Number(match[0]);
   return Number.isFinite(n) ? n : null;
+}
+
+function stripAnswerNoise(value) {
+  return normalizeShortText(value)
+    .replace(/[°度]/g, "")
+    .replace(/[()（）【】\[\]「」『』]/g, "");
+}
+
+export function splitAnswerItems(text) {
+  const raw = String(text ?? "").normalize("NFKC").trim();
+  if (!raw) return [];
+  const parts = raw
+    .split(/\s*(?:,|、|，|\/|／|&|および)\s*/)
+    .map((part) => stripAnswerNoise(part))
+    .filter(Boolean);
+  return parts.length ? parts : [];
+}
+
+/** ground_truth と手書きを厳密比較。一部選択は不正解。°/度は同一視 */
+export function answersMatchStrict(studentAnswer, groundTruth) {
+  const studentRaw = String(studentAnswer ?? "").trim();
+  const truthRaw = String(groundTruth ?? "").trim();
+  if (!studentRaw || !truthRaw) return false;
+  if (stripAnswerNoise(studentRaw) === stripAnswerNoise(truthRaw)) return true;
+  const truthItems = splitAnswerItems(truthRaw);
+  const studentItems = splitAnswerItems(studentRaw);
+  if (truthItems.length === 0) return false;
+  if (truthItems.length > 1) {
+    const studentSet = new Set(studentItems);
+    if (truthItems.some((item) => !studentSet.has(item))) return false;
+    if (studentItems.length !== truthItems.length) return false;
+    return true;
+  }
+  const studentNum = parseNumberToken(studentRaw);
+  const truthNum = parseNumberToken(truthRaw);
+  if (studentNum !== null && truthNum !== null) {
+    const studentRest = stripAnswerNoise(studentRaw).replace(/-?\d+(?:\.\d+)?/g, "");
+    const truthRest = stripAnswerNoise(truthRaw).replace(/-?\d+(?:\.\d+)?/g, "");
+    if (studentRest && truthRest && studentRest !== truthRest) return false;
+    return numbersEqual(studentNum, truthNum);
+  }
+  return false;
+}
+
+export function looksLikeSelectAll(text) {
+  return /すべて選|すべてえら|全部選|該当するものをすべて/.test(String(text ?? ""));
+}
+
+export function optionCountHint(text) {
+  const circled = String(text ?? "").match(/[①-⑳]/g);
+  if (circled && new Set(circled).size >= 3) return new Set(circled).size;
+  if (/①\s*[〜~～\-ーからと]\s*③|[1１]\s*[〜~～\-ー]\s*[3３]|①〜③|[1１]〜[3３]/.test(String(text ?? ""))) return 3;
+  return 0;
+}
+
+export function splitOptionNumbers(answer) {
+  const text = String(answer ?? "");
+  const circled = [...text.matchAll(/[①-⑳]/g)].map((match) => match[0].charCodeAt(0) - "①".charCodeAt(0) + 1);
+  const digits = [...text.matchAll(/[1-9１-９]/g)].map((match) => Number(match[0].normalize("NFKC")));
+  return [...new Set([...circled, ...digits])].sort((a, b) => a - b);
+}
+
+export function findSupplementaryDegreePair(text) {
+  const nums = [...String(text ?? "").matchAll(/(\d+)\s*(?:°|度)/g)].map((match) => Number(match[1]));
+  const uniq = [...new Set(nums)].filter((n) => n > 0 && n < 180);
+  for (let i = 0; i < uniq.length; i++) {
+    for (let j = i + 1; j < uniq.length; j++) {
+      if (uniq[i] + uniq[j] === 180) {
+        return [Math.min(uniq[i], uniq[j]), Math.max(uniq[i], uniq[j])];
+      }
+    }
+  }
+  return null;
+}
+
+function answersLookCopied(student, ground) {
+  return stripAnswerNoise(student) === stripAnswerNoise(ground) && Boolean(stripAnswerNoise(student));
+}
+
+/**
+ * Gemini が手書きを ground_truth にコピーしたときの誤〇を落とす。
+ * - すべて選び + 3択以上なのに答えが1つだけ、かつ key が答案と同じ
+ * - 語群に補角ペア（50°と130°など）があり、答案＝コピーされた key なら鋭角側を採用
+ */
+export function applyCopiedAnswerGuards(item, isCorrect, pageHay = "") {
+  const ground = item.ground_truth || item.correct_answer;
+  const hay = [item.question_text, item.topic, item.passage_text, item.word_bank, ground, pageHay]
+    .filter(Boolean)
+    .join(" ");
+  const copied = answersLookCopied(item.student_answer, ground);
+
+  if (looksLikeSelectAll(hay) && optionCountHint(hay) >= 3) {
+    const studentOpts = splitOptionNumbers(item.student_answer);
+    const truthOpts = splitOptionNumbers(ground);
+    if (studentOpts.length === 1 && (copied || truthOpts.length <= 1)) {
+      return false;
+    }
+  }
+
+  const pair = findSupplementaryDegreePair(hay);
+  const studentDeg = parseNumberToken(item.student_answer);
+  if (pair && studentDeg !== null && (studentDeg === pair[0] || studentDeg === pair[1])) {
+    const groundDeg = parseNumberToken(ground);
+    if (copied || groundDeg === null || groundDeg === studentDeg) {
+      const expected = /鈍角/.test(hay) ? pair[1] : pair[0];
+      return numbersEqual(studentDeg, expected);
+    }
+  }
+
+  return isCorrect;
 }
 
 export function numbersEqual(a, b) {
@@ -287,7 +398,8 @@ export function parseExtractProblems(raw) {
       formulaInIndex && !printed ? String(index + 1) : numberLike || `問${index + 1}`;
     const questionText = printed || (formulaInIndex ? numberLike : "");
     const studentAnswer = String(row.student_answer ?? row.user_answer ?? row.userAnswer ?? "").trim();
-    const correctAnswer = String(row.correct_answer ?? "").trim();
+    const groundTruth = String(row.ground_truth ?? row.groundTruth ?? "").trim();
+    const correctAnswer = groundTruth || String(row.correct_answer ?? "").trim();
     const topic = String(row.topic ?? row.topic_tag ?? "").trim();
     const kind =
       normalizeGradeKind(row.type) ??
@@ -297,31 +409,48 @@ export function parseExtractProblems(raw) {
       question_text: questionText,
       student_answer: studentAnswer,
       correct_answer: correctAnswer,
+      ground_truth: groundTruth || correctAnswer,
       type: kind,
       topic,
       bbox: parseGeminiBBox(row.bbox),
+      visual_type: inferVisualType({
+        visual_type: row.visual_type ?? row.visualType,
+        question_text: questionText,
+        topic,
+      }),
+      crop_box: parseGeminiBBox(row.crop_box ?? row.cropBox),
+      passage_text: String(row.passage_text ?? row.passageText ?? "").trim(),
+      word_bank: String(row.word_bank ?? row.wordBank ?? "").trim(),
     };
   });
 }
 
 export function gradeExtractedProblems(extracted, subjectHint) {
   const total = extracted.length;
+  const pageHay = extracted
+    .map((item) => [item.question_text, item.topic, item.word_bank].filter(Boolean).join(" "))
+    .join(" ");
   const problems = extracted.map((item, index) => {
-    const isCorrect =
-      item.type === "math"
+    const ground = item.ground_truth || item.correct_answer;
+    const hasFormula = Boolean(
+      extractArithmeticExpression(item.question_text) || extractArithmeticExpression(item.problem_index),
+    );
+    const rawCorrect =
+      item.type === "math" && hasFormula
         ? gradeMath({
             questionText: item.question_text,
             problemIndex: item.problem_index,
             studentAnswer: item.student_answer,
-            correctAnswer: item.correct_answer,
+            correctAnswer: ground,
           })
-        : gradeText(item.student_answer, item.correct_answer);
+        : answersMatchStrict(item.student_answer, ground);
+    const isCorrect = applyCopiedAnswerGuards(item, rawCorrect, pageHay);
 
     const blank = !item.student_answer;
     const problemType = problemTypeFromKind(item.type, `${item.question_text} ${item.problem_index}`);
     const expected =
       item.type === "math"
-        ? expectedMathValue(item.question_text, item.problem_index, item.correct_answer)
+        ? expectedMathValue(item.question_text, item.problem_index, ground)
         : null;
 
     return {
@@ -331,7 +460,8 @@ export function gradeExtractedProblems(extracted, subjectHint) {
       is_correct: isCorrect,
       student_answer: item.student_answer,
       correct_answer:
-        expected !== null && item.type === "math" ? String(expected) : item.correct_answer,
+        expected !== null && item.type === "math" && hasFormula ? String(expected) : ground,
+      ground_truth: ground,
       topic_tag: (
         item.topic ||
         (item.question_text && !isQuestionNumberOnly(item.question_text) ? item.question_text : "") ||
@@ -342,6 +472,14 @@ export function gradeExtractedProblems(extracted, subjectHint) {
       parent_coaching_tip: templateTip(item.type, isCorrect, item.student_answer),
       needs_inpaint: !isCorrect && !blank,
       problem_type: problemType,
+      visual_type: inferVisualType({
+        visual_type: item.visual_type,
+        problem_type: problemType,
+        question_text: item.question_text,
+        topic: item.topic,
+      }),
+      crop_box: item.crop_box ?? null,
+      passage_text: item.passage_text || "",
     };
   });
 

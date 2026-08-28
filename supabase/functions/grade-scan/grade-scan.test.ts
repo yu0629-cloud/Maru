@@ -21,39 +21,52 @@ import {
   shouldQueueInpaint,
   validateGradeResult,
 } from "./validate.ts";
-import { gradeMath, gradeShortText, gradeFreeText } from "./hybrid-grade.ts";
+import { gradeMath, gradeShortText, gradeFreeText, answersMatchStrict, gradeExtractedProblems } from "./hybrid-grade.ts";
 
 Deno.test("responseSchema は question_text を含む抽出キーを必須にする", () => {
-  assertEquals(GRADE_RESPONSE_SCHEMA.required, ["problems"]);
+  assertEquals(GRADE_RESPONSE_SCHEMA.required, ["subject", "problems"]);
   const item = GRADE_RESPONSE_SCHEMA.properties.problems.items;
   assertEquals(item.required, [
     "problem_index",
     "question_text",
+    "ground_truth",
     "student_answer",
-    "correct_answer",
-    "type",
-    "bbox",
-  ]);
-  assertEquals(Object.keys(item.properties), [
-    "problem_index",
-    "question_text",
-    "student_answer",
+    "is_correct",
     "correct_answer",
     "type",
     "topic",
     "bbox",
+    "visual_type",
+    "crop_box",
+  ]);
+  assertEquals(Object.keys(item.properties), [
+    "problem_index",
+    "question_text",
+    "ground_truth",
+    "student_answer",
+    "is_correct",
+    "correct_answer",
+    "type",
+    "topic",
+    "bbox",
+    "visual_type",
+    "crop_box",
+    "passage_text",
   ]);
   assertEquals(item.properties.question_text.description.includes("16"), true);
   assertEquals(item.properties.problem_index.description.includes("16"), true);
   assertEquals(item.properties.type.enum, ["math", "text"]);
+  assertEquals(item.properties.visual_type.enum, ["text_only", "has_figure", "passage_based"]);
   assertEquals(item.properties.bbox.type, "ARRAY");
   assertEquals(item.properties.bbox.items.type, "NUMBER");
+  assertEquals(item.properties.crop_box.type, "ARRAY");
+  assertEquals(item.properties.ground_truth.type, "STRING");
+  assertEquals(item.properties.is_correct.type, "BOOLEAN");
   assert(!("difficulty_level" in item.properties));
   assert(!("mistake_type" in item.properties));
   assert(!("needs_inpaint" in item.properties));
   assert(!("problem_type" in item.properties));
   assert(!("parent_coaching_tip" in item.properties));
-  assert(!("is_correct" in item.properties));
 });
 
 Deno.test("既定は 3.5 flash-lite で thinkingLevel minimal・temperature 0 の REST 直叩きする", () => {
@@ -97,6 +110,8 @@ Deno.test("サンプル JSON がスキーマ検証を通る", () => {
   assertEquals(result.problems.length, 4);
   assertEquals(result.problems[0].problem_type, "calc_block");
   assertEquals(result.problems[3].problem_type, "math_geometry_graph");
+  assertEquals(result.problems[0].visual_type, "text_only");
+  assertEquals(result.problems[3].visual_type, "has_figure");
   assertEquals(countCorrect(result).incorrect, 3);
 });
 
@@ -163,14 +178,16 @@ Deno.test("不正な得点や空の problems は拒否する", () => {
   );
 });
 
-Deno.test("1次プロンプトは問題文 OCR を必須にし、正誤・思考・解説を禁止する", () => {
+Deno.test("1次プロンプトは ground_truth を先に導かせ、手書きと厳密比較する", () => {
   const prompt = buildSystemPrompt(SAMPLE_CARTE, {
     name: "はると",
     gradeLabel: "小4",
     examTarget: "中学受験",
   });
   assert(prompt.includes("はると"));
-  assert(prompt.includes("problem_index, question_text, student_answer, correct_answer, type, bbox"));
+  assert(prompt.includes("problem_index, question_text, ground_truth, student_answer, is_correct, correct_answer, type, topic, bbox, visual_type, crop_box"));
+  assert(prompt.includes("has_figure"));
+  assert(prompt.includes("crop_box"));
   assert(prompt.includes("1問=1件"));
   assert(prompt.includes("math"));
   assert(prompt.includes("text"));
@@ -179,7 +196,14 @@ Deno.test("1次プロンプトは問題文 OCR を必須にし、正誤・思考
   assert(prompt.includes("等号"));
   assert(prompt.includes("薄い鉛筆"));
   assert(prompt.includes("雪だるま"));
-  assert(prompt.includes("採点・思考・解説は禁止"));
+  assert(prompt.includes("ground_truth"));
+  assert(prompt.includes("Step 1"));
+  assert(prompt.includes("Step 2"));
+  assert(prompt.includes("Step 3"));
+  assert(prompt.includes("目盛り"));
+  assert(prompt.includes("語群"));
+  assert(prompt.includes("すべて選べ"));
+  assert(prompt.includes("is_correct"));
   assert(prompt.includes("question_text"));
   assert(prompt.includes("0 + 7 ="));
   assert(prompt.includes("【抽出例】"));
@@ -189,12 +213,16 @@ Deno.test("1次プロンプトは問題文 OCR を必須にし、正誤・思考
   assert(prompt.includes("2 + 6 ="));
   assert(prompt.includes("解答欄"));
   assert(prompt.includes("問題番号だけ"));
+  assert(prompt.includes("50°"));
+  assert(prompt.includes("130°"));
+  assert(prompt.includes("1,3"));
   assert(!prompt.includes("short_text"));
   assert(!prompt.includes("free_text"));
   assert(!prompt.includes("difficulty_level"));
   assert(!prompt.includes("needs_inpaint"));
   assert(!prompt.includes("parent_coaching_tip"));
   assert(!prompt.includes("つるかめ算"));
+  assert(!prompt.includes("採点・思考・解説は禁止"));
   assert(formatCarteForPrompt(SAMPLE_CARTE).includes("基礎定着率: 62%"));
   const enrich = buildEnrichSystemPrompt(SAMPLE_CARTE);
   assert(enrich.includes("つるかめ算"));
@@ -230,6 +258,9 @@ Deno.test("problems 行へ一括変換し、inpaint 対象だけ残す", () => {
   assertEquals(rows[1].topic, "繰り下がり");
   assertEquals(rows[1].unit, "繰り下がり");
   assertEquals(rows[3].problem_type, "math_geometry_graph");
+  assertEquals(rows[0].visual_type, "text_only");
+  assertEquals(rows[3].visual_type, "has_figure");
+  assertEquals(rows[3].crop_box, [830, 40, 980, 700]);
   assertEquals(inferSubject("立体切断"), "math");
   assertEquals(inferSubject("漢字書き取り", "kanji"), "japanese");
 
@@ -564,6 +595,7 @@ Deno.test("ハイブリッド採点は計算をプログラム判定し、表記
   assertEquals(graded.problems[0].is_correct, true);
   assertEquals(graded.problems[0].correct_answer, "9");
   assertEquals(graded.problems[0].bbox, [80, 60, 180, 420]);
+  assertEquals(graded.problems[0].visual_type, "text_only");
   assertEquals(graded.problems[1].is_correct, false);
   assertEquals(graded.problems[2].mistake_type, "blank");
   assertEquals(graded.problems[2].parent_coaching_tip, "空欄。まず1つ書こう");
@@ -622,6 +654,63 @@ Deno.test("question_text が問題番号だけのときは捨てる", () => {
   assertEquals(graded.problems[0].question_text, "");
   assertEquals(graded.problems[1].question_text, "2 + 4 =");
   assertEquals(graded.problems[1].problem_index, "16");
+});
+
+Deno.test("ground_truth と手書きが違えば不正解。一部選択も不正解", () => {
+  assertEquals(answersMatchStrict("120°", "50°"), false);
+  assertEquals(answersMatchStrict("50度", "50°"), true);
+  assertEquals(answersMatchStrict("ア、イ", "ア、イ、ウ"), false);
+  assertEquals(answersMatchStrict("ア、イ、ウ", "ア、イ、ウ"), true);
+  const graded = gradeExtractedProblems([
+    {
+      problem_index: "4",
+      question_text: "④ あの角度は、( )です。",
+      student_answer: "120°",
+      correct_answer: "50°",
+      ground_truth: "50°",
+      type: "math",
+    },
+  ]);
+  assertEquals(graded.problems[0].is_correct, false);
+  assertEquals(graded.problems[0].correct_answer, "50°");
+});
+
+Deno.test("手書きを正解にコピーしても分度器の外側目盛りとすべて選びの一部は不正解", () => {
+  const protractor = gradeExtractedProblems([
+    {
+      problem_index: "④",
+      question_text: "㋐の角度は、( )です。語群: じょうぎ 分度器 アイ イウ アウ 130° 50°",
+      student_answer: "130°",
+      correct_answer: "130°",
+      ground_truth: "130°",
+      type: "math",
+    },
+  ]);
+  assertEquals(protractor.problems[0].is_correct, false);
+
+  const leverWrong = gradeExtractedProblems([
+    {
+      problem_index: "(3)",
+      question_text: "次の①〜③からすべて選び、番号を書きましょう。",
+      student_answer: "2",
+      correct_answer: "2",
+      ground_truth: "2",
+      type: "text",
+    },
+  ]);
+  assertEquals(leverWrong.problems[0].is_correct, false);
+
+  const leverOk = gradeExtractedProblems([
+    {
+      problem_index: "(3)",
+      question_text: "次の①〜③からすべて選び、番号を書きましょう。",
+      student_answer: "1,3",
+      correct_answer: "1,3",
+      ground_truth: "1,3",
+      type: "text",
+    },
+  ]);
+  assertEquals(leverOk.problems[0].is_correct, true);
 });
 
 

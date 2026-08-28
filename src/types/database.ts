@@ -20,6 +20,7 @@ export type ScanStatus =
 export type QuotaSource = "free" | "monthly" | "ticket";
 export type ReviewItemStatus = "queued" | "active" | "leech" | "mastered" | "retired";
 export type PrintGridType = "graph" | "squared" | "lined" | "blank";
+export type VisualType = "text_only" | "has_figure" | "passage_based";
 export type ProblemType =
   | "calc_block"
   | "math_geometry_graph"
@@ -205,6 +206,9 @@ export type Database = {
           parent_coaching_tip: string | null;
           needs_inpaint: boolean;
           problem_type: ProblemType;
+          visual_type: VisualType | null;
+          crop_box: GeminiBBox | null;
+          passage_text: string | null;
           gemini_bbox: GeminiBBox | null;
           cropped_storage_path: string | null;
           blanked_storage_path: string | null;

@@ -24,9 +24,13 @@ export function formatProblemStem(text: string | null | undefined, number: numbe
 export function flattenWorksheetItems(problems: unknown[]): Array<{
   id: string;
   number: number;
-  kind: "calc" | "text";
+  kind: "calc" | "text" | "figure" | "passage";
   layout: "compact" | "wide";
   stem: string;
+  visualType?: "text_only" | "has_figure" | "passage_based";
+  figureSrc?: string;
+  passage?: string;
+  masks?: Array<{ x: number; y: number; width: number; height: number }>;
 }>;
 export function packWorksheetRows<T extends { layout?: string }>(items: T[]): T[][];
 export function paginateWorksheetRows<T>(rows: T[][], maxRows?: number): T[][][];
@@ -49,7 +53,7 @@ export function paginateByStyle<T>(items: T[]): Array<
   Array<{
     id: string;
     number: number;
-    kind: "calc" | "text";
+    kind: "calc" | "text" | "figure" | "passage";
     stem: string;
   }>
 >;
@@ -77,6 +81,11 @@ export function buildPrintHtml(input: {
     subject?: string;
     unit?: string;
     problemType?: string;
+    visualType?: string;
+    figureImageSrc?: string;
+    figureBase64?: string;
+    figureCropBox?: unknown;
+    passageText?: string;
     imageSrc?: string;
     prompt?: string;
     questionText?: string;
@@ -107,9 +116,38 @@ export function toClipItems(problems?: unknown[]): Array<{
 export function packClipRows<T>(items: T[]): T[][];
 export function paginateClipRows<T>(rows: T[][], maxHeightMm?: number): T[][][];
 export function layoutKind(problem: unknown, cropBox?: unknown): "compact" | "wide";
+export function geminiBBoxToNormalizedBox(bbox: unknown): {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+export function coerceGeminiBox(value?: unknown): [number, number, number, number] | null;
+export function geminiBoxToPixelCrop(
+  box: unknown,
+  imageWidth: number,
+  imageHeight: number,
+): { originX: number; originY: number; width: number; height: number } | null;
+export function resolveCropBox(input?: object | null): {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
 export function expandPrintCropBox(box: {
   x: number;
   y: number;
   width: number;
   height: number;
 }): { x: number; y: number; width: number; height: number };
+export function figureAnswerMasks(
+  cropGemini?: unknown,
+  bboxGemini?: unknown,
+): {
+  crop: { x: number; y: number; width: number; height: number } | null;
+  masks: Array<{ x: number; y: number; width: number; height: number }>;
+};
+export function shrinkCropExcludingAnswer(
+  crop: { x: number; y: number; width: number; height: number },
+  answer?: { x: number; y: number; width: number; height: number } | null,
+): { x: number; y: number; width: number; height: number };

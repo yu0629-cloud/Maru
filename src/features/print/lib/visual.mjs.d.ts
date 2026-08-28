@@ -1,0 +1,20 @@
+export const VISUAL_TYPES: ["text_only", "has_figure", "passage_based"];
+export function isVisualType(value: unknown): value is "text_only" | "has_figure" | "passage_based";
+export function inferVisualType(input?: {
+  visualType?: string | null;
+  visual_type?: string | null;
+  problemType?: string | null;
+  problem_type?: string | null;
+  topicTag?: string | null;
+  topic_tag?: string | null;
+  topic?: string | null;
+  unit?: string | null;
+  questionText?: string | null;
+  question_text?: string | null;
+  prompt?: string | null;
+}): "text_only" | "has_figure" | "passage_based";
+export function figureImageSrcOf(item?: object | null): string;
+export function figureDataSrcOf(item?: object | null): string;
+export function passageTextOf(item?: object | null): string;
+export function figureCropBoxOf(item?: object | null): number[] | null;
+export function coerceGeminiBox(value?: unknown): [number, number, number, number] | null;

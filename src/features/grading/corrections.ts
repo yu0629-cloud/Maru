@@ -1,4 +1,4 @@
-import type { ProblemType } from "@/src/types/database";
+import type { ProblemType, VisualType } from "@/src/types/database";
 import type { GeminiBBox } from "@/src/types/grading";
 
 export const MISTAKE_LABELS = {
@@ -22,6 +22,11 @@ export type GradedProblemView = {
   imageSrc: string;
   needs_inpaint: boolean;
   problem_type?: ProblemType;
+  visual_type?: VisualType;
+  crop_box?: GeminiBBox | null;
+  passage_text?: string;
+  figureImageSrc?: string;
+  figureBase64?: string;
   bbox?: GeminiBBox;
   dirty?: boolean;
 };

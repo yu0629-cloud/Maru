@@ -6,6 +6,8 @@ import {
   PROBLEM_TYPE_LABELS,
 } from "./problem-types.mjs";
 import { isIncorrectForPrint, isQuestionNumberOnly, stripLatexDollars } from "./from-reviews.mjs";
+import { figureAnswerMasks } from "./bbox.mjs";
+import { figureCropBoxOf, figureDataSrcOf, figureImageSrcOf, inferVisualType, passageTextOf } from "./visual.mjs";
 
 export { chooseAnswerStyle, problemsPerPage, styleToGridType, ANSWER_STYLE_LABELS, PROBLEM_TYPE_LABELS };
 export {
@@ -16,7 +18,16 @@ export {
   isIncorrectPrintProblem,
   estimateRowHeightMm,
 } from "./clip-layout.mjs";
-export { geminiBBoxToNormalizedBox, resolveCropBox, expandPrintCropBox, answerMaskBox } from "./bbox.mjs";
+export {
+  coerceGeminiBox,
+  geminiBBoxToNormalizedBox,
+  geminiBoxToPixelCrop,
+  resolveCropBox,
+  expandPrintCropBox,
+  answerMaskBox,
+  figureAnswerMasks,
+  shrinkCropExcludingAnswer,
+} from "./bbox.mjs";
 
 export const WORKSHEET_PER_PAGE = 6;
 export const PRINT_ROWS_PER_PAGE = 3;
@@ -138,16 +149,22 @@ function worksheetLayout(kind, stem, problem) {
   return "compact";
 }
 
-function toWorksheetItem(problem, text, number, kind) {
+function toWorksheetItem(problem, text, number, kind, extra = {}) {
   const cleaned = String(text ?? "").replace(/\$/g, "").trim();
-  const expr = extractMathExpression(cleaned);
+  const expr = kind === "figure" || kind === "passage" ? "" : extractMathExpression(cleaned);
   const stem = expr ? formatMathExpression(expr) : cleaned.replace(/\$/g, "").trim();
+  const layout =
+    kind === "figure" || kind === "passage" ? "wide" : worksheetLayout(kind, stem, problem);
   return {
     id: `${problem?.id ?? "p"}-${number}`,
     number,
     kind,
-    layout: worksheetLayout(kind, stem, problem),
+    layout,
     stem,
+    visualType: extra.visualType ?? inferVisualType(problem),
+    figureSrc: extra.figureSrc ?? "",
+    passage: extra.passage ?? "",
+    masks: extra.masks ?? [],
   };
 }
 
@@ -155,6 +172,38 @@ export function flattenWorksheetItems(problems) {
   const items = [];
   for (const problem of problems ?? []) {
     if (!isIncorrectForPrint(problem)) continue;
+    const visual = inferVisualType(problem);
+    const figureSrc = figureDataSrcOf(problem) || (isRasterImage(figureImageSrcOf(problem)) ? figureImageSrcOf(problem) : "");
+    const passage = passageTextOf(problem);
+
+    if (visual === "passage_based") {
+      const question = extractQuestionText(problem);
+      const body = passage || question;
+      if (!body || isQuestionNumberOnly(body) || DUMMY_QUESTION.test(body)) continue;
+      items.push(
+        toWorksheetItem(problem, passage ? question : "", items.length + 1, "passage", {
+          visualType: visual,
+          passage: body,
+        }),
+      );
+      continue;
+    }
+
+    if (visual === "has_figure" && figureSrc) {
+      const planned = figureAnswerMasks(
+        figureCropBoxOf(problem),
+        problem?.bbox ?? problem?.gemini_bbox ?? problem?.geminiBbox,
+      );
+      items.push(
+        toWorksheetItem(problem, "", items.length + 1, "figure", {
+          visualType: visual,
+          figureSrc,
+          masks: planned.masks,
+        }),
+      );
+      continue;
+    }
+
     const expressions = calcExpressionsOf(problem);
     if (expressions.length) {
       for (const expression of expressions) {
@@ -245,6 +294,81 @@ html, body {
   page-break-after: auto;
   break-after: auto;
 }
+.item {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1.5px solid #d0d0d0;
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 10px;
+  background: #fff;
+  box-sizing: border-box;
+  min-height: 52px;
+  page-break-inside: avoid;
+}
+.item-stem {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: #222;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.item-stem .num {
+  font-size: 14px;
+  font-weight: 400;
+  color: #666;
+  margin-right: 8px;
+}
+.answer-box {
+  flex: 0 0 auto;
+  width: 60px;
+  height: 35px;
+  border: 2px solid #333;
+  box-sizing: border-box;
+  background: #fff;
+  margin-top: 2px;
+}
+.item-figure {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+.item-figure img {
+  max-width: 100%;
+  max-height: 80mm;
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+  display: block;
+}
+.figure-media {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+}
+.figure-mask {
+  position: absolute;
+  background: #fff;
+  pointer-events: none;
+}
+.answer-frame {
+  min-height: 22mm;
+  border: 2px solid #333;
+  border-radius: 6px;
+  margin-top: 8px;
+  background: #fff;
+  box-sizing: border-box;
+}
+.passage-block {
+  white-space: pre-wrap;
+}
 `;
 
 function sanitizeStem(text) {
@@ -257,13 +381,56 @@ function sanitizeStem(text) {
 }
 
 function worksheetCell(item) {
-  const stem = escapeHtml(sanitizeStem(item.stem)).replace(/\$/g, "").trim();
-  return `<div class="item" style="display: flex; flex-direction: row; align-items: center; justify-content: space-between; border: 1.5px solid #d0d0d0; border-radius: 8px; padding: 10px 14px; margin-bottom: 10px; background: #fff; box-sizing: border-box; min-height: 60px; page-break-inside: avoid;">
-  <div style="display: flex; flex-direction: row; align-items: center; font-size: 22px; font-weight: bold; color: #222; white-space: nowrap;">
-    <span style="font-size: 15px; color: #666; margin-right: 10px;">(${item.number})</span>
-    <span>${stem}</span>
+  if (item.kind === "figure" && item.figureSrc) {
+    const rawSrc = String(item.figureSrc);
+    const embed = rawSrc.startsWith("data:image/") ? rawSrc : "";
+    const src = escapeHtml(embed);
+    const masks = Array.isArray(item.masks) ? item.masks : [];
+    const maskHtml = embed
+      ? masks
+          .map((mask) => {
+            const left = Number(mask.x) * 100;
+            const top = Number(mask.y) * 100;
+            const width = Number(mask.width) * 100;
+            const height = Number(mask.height) * 100;
+            if (![left, top, width, height].every((n) => Number.isFinite(n))) return "";
+            return `<div class="figure-mask" style="left:${left}%;top:${top}%;width:${width}%;height:${height}%;"></div>`;
+          })
+          .join("")
+      : "";
+    const image = embed
+      ? `<div class="figure-media">
+    <img src="${src}" alt="" />
+    ${maskHtml}
+  </div>`
+      : "";
+    return `<div class="item item-figure" style="display: flex; flex-direction: column; border: 1.5px solid #d0d0d0; border-radius: 8px; padding: 10px 14px; margin-bottom: 10px; background: #fff; box-sizing: border-box; page-break-inside: avoid;">
+  <div style="font-size: 14px; color: #666; margin-bottom: 8px;">(${item.number})</div>
+  ${image}
+  <div class="answer-frame">&nbsp;</div>
+</div>`;
+  }
+
+  if (item.kind === "passage") {
+    const passage = escapeHtml(item.passage || item.stem).replace(/\$/g, "").trim();
+    const stem = escapeHtml(sanitizeStem(item.stem)).replace(/\$/g, "").trim();
+    const same = stem && passage && stem === passage;
+    const question = stem && !same
+      ? `<div style="font-size: 15px; font-weight: 700; color: #222; margin: 8px 0;">(${item.number}) ${stem}</div>`
+      : `<div style="font-size: 15px; color: #666; margin: 8px 0;">(${item.number})</div>`;
+    return `<div class="item item-passage" style="display: flex; flex-direction: column; border: 1.5px solid #d0d0d0; border-radius: 8px; padding: 10px 14px; margin-bottom: 10px; background: #fff; box-sizing: border-box; page-break-inside: avoid;">
+  <div class="passage-block" style="border: 1px solid #ddd; border-radius: 6px; padding: 10px 12px; font-size: 13px; line-height: 1.7; color: #222; background: #fbfbfb;">${passage}</div>
+  ${question}
+  <div style="display: flex; justify-content: flex-end;">
+    <div class="answer-box" style="width: 60px; height: 35px; border: 2px solid #333; display: inline-block; box-sizing: border-box;">&nbsp;</div>
   </div>
-  <div class="answer-box" style="width: 60px; height: 35px; border: 2px solid #333; display: inline-block; box-sizing: border-box;">&nbsp;</div>
+</div>`;
+  }
+
+  const stem = escapeHtml(sanitizeStem(item.stem)).replace(/\$/g, "").trim();
+  return `<div class="item">
+  <div class="item-stem"><span class="num">(${item.number})</span>${stem}</div>
+  <div class="answer-box">&nbsp;</div>
 </div>`;
 }
 

@@ -3,6 +3,12 @@ import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import { Image } from "react-native";
 import { maruLog } from "@/src/lib/debug/maruLog";
+import {
+  coerceGeminiBox,
+  figureAnswerMasks,
+  geminiBoxToPixelCrop,
+  normalizedBoxToGemini,
+} from "@/src/features/print/lib/bbox.mjs";
 
 export const SCAN_MAX_LONG_EDGE = 1280;
 export const SCAN_CAPTURE_QUALITY = 0.5;
@@ -261,4 +267,285 @@ export async function purgeLocalScanCache(input?: { keepUris?: Array<string | un
     maruLog("fs", "purgeLocalScanCache", { deleted: deleted.length });
   }
   return { deleted };
+}
+
+export const FIGURE_CACHE_VERSION = 2;
+const FULL_PAGE_CROP: [number, number, number, number] = [0, 0, 1000, 1000];
+
+function figuresDir() {
+  const root = FileSystem.documentDirectory ?? FileSystem.cacheDirectory;
+  if (!root) throw new Error("この端末では写真を保存できません");
+  return `${root}maru-figures/`;
+}
+
+function figureLog(message: string, extra?: unknown) {
+  maruLog("figure", message, extra);
+}
+
+/** 採点マーク付き切り抜きや maru-figures キャッシュはソースに使わない */
+export function isRawScanSourceUri(uri?: string | null) {
+  const value = String(uri ?? "").trim();
+  if (!value || value.startsWith("mock")) return false;
+  if (/maru-figures/i.test(value)) return false;
+  if (value.startsWith("data:image/svg")) return false;
+  return (
+    value.startsWith("file:") ||
+    value.startsWith("content:") ||
+    value.startsWith("http://") ||
+    value.startsWith("https://") ||
+    value.startsWith("ph://") ||
+    value.startsWith("assets-library:") ||
+    value.startsWith("data:image/") ||
+    value.startsWith("/")
+  );
+}
+
+async function writeDataUriToFile(dataUri: string, dest: string) {
+  const base64 = dataUri.replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, "");
+  await FileSystem.writeAsStringAsync(dest, base64, { encoding: FileSystem.EncodingType.Base64 });
+  return toFileUri(dest);
+}
+
+/** file:// / ph:// / content:// / HTTPS / data URI を ImageManipulator が開けるローカルファイルにする */
+export async function ensureLocalImageFile(uri: string): Promise<string | null> {
+  const value = String(uri ?? "").trim();
+  if (!value || value.startsWith("mock")) {
+    figureLog("ensureLocal skip: empty or mock", { uri: value.slice(0, 80) });
+    return null;
+  }
+  const cacheRoot = FileSystem.cacheDirectory || FileSystem.documentDirectory;
+  if (!cacheRoot) {
+    figureLog("ensureLocal skip: no cache dir");
+    return null;
+  }
+  try {
+    if (value.startsWith("data:image/")) {
+      const dest = `${cacheRoot}figure-src-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
+      return await writeDataUriToFile(value, dest);
+    }
+    if (/^https?:/i.test(value)) {
+      const dest = `${cacheRoot}figure-dl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
+      const result = await FileSystem.downloadAsync(value, dest);
+      figureLog("ensureLocal downloaded https", {
+        dest: result.uri,
+        status: result.status,
+      });
+      if (result.status && result.status >= 400) return null;
+      return toFileUri(result.uri);
+    }
+    const local = toFileUri(value);
+    if (local.startsWith("file:") && (await localFileExists(local))) {
+      figureLog("ensureLocal existing file", { uri: local.slice(0, 120) });
+      return local;
+    }
+    if (
+      local.startsWith("ph://") ||
+      local.startsWith("content:") ||
+      local.startsWith("assets-library:") ||
+      local.startsWith("file:")
+    ) {
+      const dest = `${cacheRoot}figure-copy-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
+      await FileSystem.copyAsync({ from: local, to: dest });
+      const info = await FileSystem.getInfoAsync(dest);
+      if (!info.exists) {
+        figureLog("ensureLocal copy missing", { dest });
+        return null;
+      }
+      figureLog("ensureLocal copied", { from: local.slice(0, 80), dest });
+      return toFileUri(dest);
+    }
+    figureLog("ensureLocal unsupported scheme", { uri: local.slice(0, 80) });
+    return null;
+  } catch (error) {
+    figureLog("ensureLocal fail", {
+      error: error instanceof Error ? error.message : error,
+      uri: value.slice(0, 80),
+    });
+    return null;
+  }
+}
+
+async function probeImageSizeForCrop(uri: string): Promise<{ width: number; height: number } | undefined> {
+  const fromGetSize = await probeImageSize(uri);
+  if (fromGetSize?.width && fromGetSize.height) {
+    figureLog("size from Image.getSize", fromGetSize);
+    return fromGetSize;
+  }
+  try {
+    const probe = await ImageManipulator.manipulateAsync(uri, [], {
+      compress: 1,
+      format: ImageManipulator.SaveFormat.JPEG,
+    });
+    if (probe.width && probe.height) {
+      figureLog("size from manipulateAsync probe", { width: probe.width, height: probe.height });
+      return { width: probe.width, height: probe.height };
+    }
+  } catch (error) {
+    figureLog("size probe fail", { error: error instanceof Error ? error.message : error });
+  }
+  return undefined;
+}
+
+async function resultToDataUri(result: {
+  uri: string;
+  base64?: string;
+}): Promise<string | null> {
+  if (result.base64) {
+    return `data:image/jpeg;base64,${result.base64}`;
+  }
+  try {
+    const fromFile = await FileSystem.readAsStringAsync(toFileUri(result.uri), {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    figureLog("base64 missing on result, read from file");
+    return `data:image/jpeg;base64,${fromFile}`;
+  } catch (error) {
+    figureLog("resultToDataUri fail", { error: error instanceof Error ? error.message : error });
+    return null;
+  }
+}
+
+async function manipulateCrop(
+  local: string,
+  pixel: { originX: number; originY: number; width: number; height: number },
+) {
+  figureLog("manipulateAsync crop", pixel);
+  return ImageManipulator.manipulateAsync(local, [{ crop: pixel }], {
+    compress: 0.82,
+    format: ImageManipulator.SaveFormat.JPEG,
+    base64: true,
+  });
+}
+
+function geminiForCrop(cropBox: unknown, answerBBox?: unknown) {
+  const gemini = coerceGeminiBox(cropBox) ?? FULL_PAGE_CROP;
+  const planned = figureAnswerMasks(gemini, answerBBox ?? null);
+  if (planned.crop) return normalizedBoxToGemini(planned.crop);
+  return gemini;
+}
+
+async function cacheFigureFile(resultUri: string, scanId?: string, problemId?: string) {
+  if (!scanId || !problemId) return;
+  try {
+    const dir = figuresDir();
+    await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+    const dest = `${dir}${scanId}-${problemId}-v${FIGURE_CACHE_VERSION}.jpg`;
+    for (const stale of [`${dir}${scanId}-${problemId}.jpg`, `${dir}${scanId}-${problemId}-v1.jpg`]) {
+      await FileSystem.deleteAsync(stale, { idempotent: true });
+    }
+    await FileSystem.deleteAsync(dest, { idempotent: true });
+    await FileSystem.copyAsync({ from: resultUri, to: dest });
+  } catch (error) {
+    figureLog("cache write skip", { error: error instanceof Error ? error.message : error });
+  }
+}
+
+/**
+ * has_figure の crop_box を生スキャンから切り抜き、data:image/jpeg;base64,... を返す。
+ * 失敗時は null（呼び出し側でテキストフォールバック）。
+ */
+export async function cropFigureToBase64(input: {
+  sourceUri: string;
+  cropBox?: unknown;
+  scanId?: string;
+  problemId?: string;
+  answerBBox?: unknown;
+  visualType?: string;
+}): Promise<string | null> {
+  const visual = String(input.visualType ?? "");
+  const geminiCrop = coerceGeminiBox(input.cropBox);
+  figureLog("crop start", {
+    problemId: input.problemId,
+    visualType: visual || "(unset)",
+    visualIsHasFigure: visual === "has_figure",
+    sourceUri: String(input.sourceUri ?? "").slice(0, 120),
+    cropBox: geminiCrop,
+    cropBoxRawType: Array.isArray(input.cropBox) ? "array" : typeof input.cropBox,
+    answerBBox: coerceGeminiBox(input.answerBBox),
+  });
+
+  const local = await ensureLocalImageFile(input.sourceUri);
+  if (!local) {
+    figureLog("fail: no local image", {
+      problemId: input.problemId,
+      sourceUri: String(input.sourceUri ?? "").slice(0, 120),
+    });
+    return null;
+  }
+
+  const size = await probeImageSizeForCrop(local);
+  if (!size?.width || !size.height) {
+    figureLog("fail: image size unknown", { problemId: input.problemId, local: local.slice(0, 120) });
+    return null;
+  }
+
+  const attempts: Array<{ label: string; box: [number, number, number, number] }> = [
+    { label: "planned", box: geminiForCrop(geminiCrop ?? FULL_PAGE_CROP, input.answerBBox) as [number, number, number, number] },
+  ];
+  if (geminiCrop) attempts.push({ label: "raw-crop_box", box: geminiCrop as [number, number, number, number] });
+  attempts.push({ label: "full-page", box: FULL_PAGE_CROP });
+
+  let lastError: unknown;
+  for (const attempt of attempts) {
+    const pixel = geminiBoxToPixelCrop(attempt.box, size.width, size.height);
+    if (!pixel) {
+      figureLog("skip attempt: pixel crop invalid", {
+        problemId: input.problemId,
+        label: attempt.label,
+        box: attempt.box,
+        image: size,
+      });
+      continue;
+    }
+    try {
+      const result = await manipulateCrop(local, pixel);
+      const dataUri = await resultToDataUri(result);
+      if (!dataUri) {
+        figureLog("fail: no base64 on result", { problemId: input.problemId, label: attempt.label });
+        continue;
+      }
+      await cacheFigureFile(result.uri, input.scanId, input.problemId);
+      figureLog("crop ok", {
+        problemId: input.problemId,
+        label: attempt.label,
+        image: size,
+        pixel,
+        dataUriChars: dataUri.length,
+      });
+      return dataUri;
+    } catch (error) {
+      lastError = error;
+      figureLog("manipulateAsync exception", {
+        problemId: input.problemId,
+        label: attempt.label,
+        pixel,
+        error: error instanceof Error ? error.message : error,
+      });
+    }
+  }
+
+  figureLog("fail: all crop attempts exhausted", {
+    problemId: input.problemId,
+    error: lastError instanceof Error ? lastError.message : lastError,
+  });
+  return null;
+}
+
+/** has_figure の crop_box を生スキャンから切り抜く。成功時は data URI、失敗時は null */
+export async function cropAndCacheFigure(input: {
+  sourceUri: string;
+  cropBox: [number, number, number, number] | unknown;
+  scanId: string;
+  problemId: string;
+  answerBBox?: [number, number, number, number] | null;
+  visualType?: string;
+}): Promise<string | null> {
+  if (!isRawScanSourceUri(input.sourceUri) && !String(input.sourceUri ?? "").startsWith("data:image/")) {
+    figureLog("cropAndCacheFigure skip: not a raw scan source", {
+      problemId: input.problemId,
+      sourceUri: String(input.sourceUri ?? "").slice(0, 80),
+    });
+    return null;
+  }
+  return cropFigureToBase64(input);
 }
