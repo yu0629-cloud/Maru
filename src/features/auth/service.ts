@@ -63,8 +63,17 @@ export async function signInMock(overrides?: Partial<MockSession>) {
 }
 
 export async function signInAnonymouslyMock() {
+  const existing = await loadMockSession();
+  if (existing?.isAnonymous && existing.userId) {
+    const { rememberGuestLocalId } = await import("@/src/features/storage/guest-scans");
+    await rememberGuestLocalId(existing.userId);
+    await persistMockSession(existing);
+    return existing;
+  }
+  const { getOrCreateGuestLocalId } = await import("@/src/features/storage/guest-scans");
+  const guestId = await getOrCreateGuestLocalId();
   return signInMock({
-    userId: `anon_${Date.now().toString(36)}`,
+    userId: guestId,
     email: null,
     displayName: "ゲスト",
     isAnonymous: true,
@@ -117,6 +126,11 @@ export async function signInAnonymously() {
   if (shouldMockAuth()) return signInAnonymouslyMock();
   const { data, error } = await supabase.auth.signInAnonymously();
   if (error) throw mapAuthError(error);
+  const userId = data.session?.user?.id;
+  if (userId) {
+    const { rememberGuestLocalId } = await import("@/src/features/storage/guest-scans");
+    await rememberGuestLocalId(userId);
+  }
   return data.session;
 }
 
@@ -198,8 +212,13 @@ export async function signOut() {
 export async function restoreLocalAuth() {
   if (shouldMockAuth()) {
     const session = await loadMockSession();
-    if (session) applyLocalSession(session, true);
-    else useAuthStore.getState().setReady(true);
+    if (session) {
+      if (session.isAnonymous && session.userId) {
+        const { rememberGuestLocalId } = await import("@/src/features/storage/guest-scans");
+        await rememberGuestLocalId(session.userId);
+      }
+      applyLocalSession(session, true);
+    } else useAuthStore.getState().setReady(true);
     return;
   }
   const { data } = await supabase.auth.getSession();
@@ -209,11 +228,16 @@ export async function restoreLocalAuth() {
     useAuthStore.getState().setReady(true);
     return;
   }
+  const isAnonymous = Boolean(user.is_anonymous);
+  if (isAnonymous) {
+    const { rememberGuestLocalId } = await import("@/src/features/storage/guest-scans");
+    await rememberGuestLocalId(user.id);
+  }
   useAuthStore.getState().setSession({
     userId: user.id,
     email: user.email ?? null,
     displayName: (user.user_metadata?.display_name as string | undefined) ?? "",
-    isAnonymous: Boolean(user.is_anonymous),
+    isAnonymous,
     mocked: false,
   });
 }

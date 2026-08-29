@@ -1,7 +1,22 @@
+import * as Linking from "expo-linking";
+import * as WebBrowser from "expo-web-browser";
+
+const DEFAULT_TERMS_URL =
+  "https://docs.google.com/document/d/e/2PACX-1vTL3BWhJjqpCTwHVwMMP-VTs23cnsOIZEXPYkpaPOuPXXwoWup__BCyx1TTpTk7WF9zG6oCiKQdgA8d/pub";
+const DEFAULT_PRIVACY_URL =
+  "https://docs.google.com/document/d/e/2PACX-1vTWB0rsfyNkGyv-gXf_BiRjPNjXNdmyxyWvVnNpDi71jVD0ETbc7ZFM2IOuO6Ah6tl-fb6Lx0FUGLNQ/pub";
+const DEFAULT_COMMERCE_URL =
+  "https://docs.google.com/document/d/e/2PACX-1vRnrBL151s-KjWlLSK4CfdQFNvcQq8EG_DV69BC7vOOl_j0i53IEoatHzkBwPtQGvyBx5n9Xz6PTnMq/pub";
+
+function envUrl(value: string | undefined, fallback: string | null) {
+  const trimmed = (value ?? "").trim();
+  return trimmed || fallback;
+}
+
 export const LEGAL_DOCS = {
   terms: {
     title: "利用規約",
-    url: process.env.EXPO_PUBLIC_TERMS_URL ?? null,
+    url: envUrl(process.env.EXPO_PUBLIC_TERMS_URL, DEFAULT_TERMS_URL),
     body: `MARU 利用規約（草案）
 
 1. 本サービスは、保護者が家庭学習のプリントを撮影し、丸付け・復習・印刷を行うためのツールです。
@@ -13,7 +28,7 @@ export const LEGAL_DOCS = {
   },
   privacy: {
     title: "プライバシーポリシー",
-    url: process.env.EXPO_PUBLIC_PRIVACY_URL ?? null,
+    url: envUrl(process.env.EXPO_PUBLIC_PRIVACY_URL, DEFAULT_PRIVACY_URL),
     body: `MARU プライバシーポリシー（草案）
 
 1. 取得する情報: アカウント情報、子どもの学年・教科、撮影したプリント画像、採点結果、端末識別子。
@@ -25,7 +40,7 @@ export const LEGAL_DOCS = {
   },
   commerce: {
     title: "特定商取引法に基づく表記",
-    url: process.env.EXPO_PUBLIC_TOKUSHOHO_URL ?? null,
+    url: envUrl(process.env.EXPO_PUBLIC_TOKUSHOHO_URL, DEFAULT_COMMERCE_URL),
     body: `特定商取引法に基づく表記（草案）
 
 販売事業者: （ストア申請時に記入）
@@ -46,3 +61,15 @@ export const LEGAL_DOCS = {
 } as const;
 
 export type LegalDocId = keyof typeof LEGAL_DOCS;
+export const LEGAL_LINK_IDS = ["privacy", "terms", "commerce"] as const;
+
+/** In-App Browser。失敗時は外部ブラウザへフォールバックする */
+export async function openLegalUrl(url: string | null | undefined) {
+  const target = String(url ?? "").trim();
+  if (!target) return;
+  try {
+    await WebBrowser.openBrowserAsync(target);
+  } catch {
+    await Linking.openURL(target);
+  }
+}

@@ -1,6 +1,7 @@
 /** 採点・復習キューからお直しプリント用の不正解・空欄問題を集める */
 
-import { figureCropBoxOf, figureDataSrcOf, figureImageSrcOf, inferVisualType, passageTextOf } from "./visual.mjs";
+import { figureCropBoxOf, figureDataSrcOf, figureImageSrcOf, inferVisualType, passageTextOf, contextTextOf, optionsTextOf } from "./visual.mjs";
+import { normalizeOcrText } from "./ocr-text.mjs";
 
 export function isBlankPrintAnswer(item) {
   const status = String(item?.status ?? item?.answer_status ?? item?.answerStatus ?? "").toLowerCase();
@@ -33,7 +34,7 @@ export function isQuestionNumberOnly(text) {
 }
 
 export function displayQuestionText(text, label) {
-  const value = stripLatexDollars(text);
+  const value = normalizeOcrText(stripLatexDollars(text));
   if (!value || isQuestionNumberOnly(value)) return "";
   const index = stripLatexDollars(label);
   if (index && value === index) return "";
@@ -76,13 +77,22 @@ export function printProblemFromReview(item) {
     studentAnswer: item?.studentAnswer || item?.student_answer || "",
     correctAnswer: item?.correctAnswer || item?.correct_answer || "",
     parentCoachingTip: item?.parentCoachingTip || item?.parent_coaching_tip || "",
-    bbox: item?.bbox,
+    bbox: item?.bbox ?? item?.gemini_bbox ?? item?.geminiBbox,
     cropBox: item?.cropBox || item?.bounding_box,
     visualType: inferVisualType(item),
     figureCropBox: figureCropBoxOf(item),
+    parentFigureBox: item?.parentFigureBox ?? item?.parent_figure_box ?? null,
+    subFigureBox: item?.subFigureBox ?? item?.sub_figure_box ?? null,
     figureImageSrc: expired ? "" : figureImageSrcOf(item),
     figureBase64: expired ? "" : String(item?.figureBase64 ?? item?.figure_base64 ?? "").trim(),
-    passageText: passageTextOf(item),
+    parentFigureSrc: expired ? "" : String(item?.parentFigureSrc ?? item?.parent_figure_src ?? "").trim(),
+    parentFigureBase64: expired ? "" : String(item?.parentFigureBase64 ?? item?.parent_figure_base64 ?? "").trim(),
+    subFigureSrc: expired ? "" : String(item?.subFigureSrc ?? item?.sub_figure_src ?? "").trim(),
+    subFigureBase64: expired ? "" : String(item?.subFigureBase64 ?? item?.sub_figure_base64 ?? "").trim(),
+    passageText: normalizeOcrText(passageTextOf(item)),
+    contextText: normalizeOcrText(String(item?.contextText ?? item?.context_text ?? item?.parent_context ?? passageTextOf(item) ?? "").trim()),
+    parentContext: normalizeOcrText(String(item?.parentContext ?? item?.parent_context ?? item?.contextText ?? item?.context_text ?? "").trim()),
+    optionsText: normalizeOcrText(String(item?.optionsText ?? item?.options_text ?? "").trim()),
     blankedPath: expired ? "" : item?.blankedPath || "",
     croppedPath: expired ? "" : item?.croppedPath || "",
     originalPath: expired ? "" : item?.originalPath || "",
@@ -118,13 +128,18 @@ export function printProblemsFromScans(scans, childId) {
           studentAnswer: problem.student_answer,
           correctAnswer: problem.correct_answer,
           parentCoachingTip: problem.parent_coaching_tip,
-          bbox: problem.bbox,
+          bbox: problem.bbox ?? problem.gemini_bbox ?? problem.geminiBbox,
           cropBox: problem.bounding_box,
           visualType: problem.visual_type || problem.visualType,
           figureCropBox: problem.crop_box || problem.figureCropBox,
+          parentFigureBox: problem.parent_figure_box || problem.parentFigureBox,
+          subFigureBox: problem.sub_figure_box || problem.subFigureBox,
           figureImageSrc: problem.figureImageSrc,
           figureBase64: problem.figureBase64,
           passageText: problem.passage_text || problem.passageText,
+          contextText: problem.context_text || problem.contextText || problem.parent_context,
+          parentContext: problem.parent_context || problem.parentContext || problem.context_text,
+          optionsText: problem.options_text || problem.optionsText,
           imageSrc: problem.imageSrc,
           localUri: scan.localUri,
           originalPath: scan.originalStoragePath,
@@ -150,6 +165,7 @@ export const DAILY_PRINT_MAX = 5;
 
 export function hasPrintableQuestion(item) {
   if (questionTextOf(item)) return true;
+  if (contextTextOf(item) || optionsTextOf(item) || passageTextOf(item)) return true;
   const visual = inferVisualType(item);
   if (visual === "has_figure" && (figureDataSrcOf(item) || figureImageSrcOf(item) || figureCropBoxOf(item))) return true;
   if (visual === "passage_based" && passageTextOf(item)) return true;

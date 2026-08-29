@@ -4,6 +4,7 @@ import { Link } from "expo-router";
 import { href, replace } from "@/src/lib/nav/href";
 import { mapAuthError } from "@/src/features/auth/errors";
 import { signUpWithEmail } from "@/src/features/auth/service";
+import { LegalFooter } from "@/src/components/LegalFooter";
 import { useT } from "@/src/i18n";
 
 export default function SignupScreen() {
@@ -63,6 +64,7 @@ export default function SignupScreen() {
         <Link href={href("/(auth)/login")} className="mt-5">
           <Text className="text-center text-maru-600">{t("auth.backToLogin")}</Text>
         </Link>
+        <LegalFooter />
       </View>
     </KeyboardAvoidingView>
   );

@@ -20,23 +20,44 @@ export function extractQuestionText(item: {
   correct_answer?: string;
 }): string;
 export function formatMathExpression(text?: string | null): string;
-export function formatProblemStem(text: string | null | undefined, number: number): string;
+export function formatProblemStem(text: string | null | undefined, number?: string | number | null): string;
 export function flattenWorksheetItems(problems: unknown[]): Array<{
   id: string;
-  number: number;
+  number: string | number;
+  numberLabel?: string;
+  numberStyle?: "square" | "round";
   kind: "calc" | "text" | "figure" | "passage";
   layout: "compact" | "wide";
   stem: string;
   visualType?: "text_only" | "has_figure" | "passage_based";
   figureSrc?: string;
   passage?: string;
+  context?: string;
+  options?: string;
   masks?: Array<{ x: number; y: number; width: number; height: number }>;
+  occupancy?: { widthPct: number; heightMm: number } | null;
+  parentFigureSrc?: string;
+  subFigureSrc?: string;
+  parts?: Array<{
+    number: string | number;
+    numberLabel?: string;
+    numberStyle?: "square" | "round";
+    stem: string;
+    options?: string;
+    subFigureSrc?: string;
+    subOccupancy?: { widthPct: number; heightMm: number } | null;
+  }>;
 }>;
+export function mergeSharedFigureItems<T>(items: T[]): T[];
+export function occupancyFromBox(box: unknown): { widthPct: number; heightMm: number };
+export function cropOccupancyOf(problem: unknown): { widthPct: number; heightMm: number };
 export function packWorksheetRows<T extends { layout?: string }>(items: T[]): T[][];
 export function paginateWorksheetRows<T>(rows: T[][], maxRows?: number): T[][][];
 export function paginateWorksheetItems<T>(items: T[], perPage?: number): T[][];
 export const WORKSHEET_PER_PAGE: 6;
 export const PRINT_ROWS_PER_PAGE: 3;
+export const A4_CONTENT_WIDTH_MM: 186;
+export const A4_CONTENT_HEIGHT_MM: 273;
 export function chooseAnswerStyle(input: {
   topicTag?: string;
   unit?: string;
@@ -82,6 +103,8 @@ export function buildPrintHtml(input: {
     figureBase64?: string;
     figureCropBox?: unknown;
     passageText?: string;
+    contextText?: string;
+    optionsText?: string;
     imageSrc?: string;
     prompt?: string;
     questionText?: string;
@@ -119,11 +142,22 @@ export function geminiBBoxToNormalizedBox(bbox: unknown): {
   height: number;
 };
 export function coerceGeminiBox(value?: unknown): [number, number, number, number] | null;
+export function usableGeminiBox(value?: unknown): [number, number, number, number] | null;
 export function geminiBoxToPixelCrop(
   box: unknown,
   imageWidth: number,
   imageHeight: number,
 ): { originX: number; originY: number; width: number; height: number } | null;
+export function expandFigureGeminiBox(
+  box?: unknown,
+  pad?: number,
+): [number, number, number, number] | null;
+export function prepareParentFigureBox(
+  parent?: unknown,
+  sub?: unknown,
+  gap?: number,
+): [number, number, number, number] | null;
+export function stripRepeatedLead(stem?: unknown, context?: unknown): string;
 export function resolveCropBox(input?: object | null): {
   x: number;
   y: number;
@@ -136,6 +170,10 @@ export function expandPrintCropBox(box: {
   width: number;
   height: number;
 }): { x: number; y: number; width: number; height: number };
+export function padNormalizedBox(
+  box: { x: number; y: number; width: number; height: number },
+  pad?: number,
+): { x: number; y: number; width: number; height: number };
 export function answerMaskBox(
   original: { x: number; y: number; width: number; height: number },
   expanded?: { x: number; y: number; width: number; height: number },
@@ -143,11 +181,21 @@ export function answerMaskBox(
 export function shrinkCropExcludingAnswer(
   crop: { x: number; y: number; width: number; height: number },
   answer?: { x: number; y: number; width: number; height: number } | null,
+  options?: { preserveExtent?: boolean },
 ): { x: number; y: number; width: number; height: number };
 export function figureAnswerMasks(
   cropGemini?: unknown,
   bboxGemini?: unknown,
+  options?: { preserveExtent?: boolean },
 ): {
   crop: { x: number; y: number; width: number; height: number } | null;
+  masks: Array<{ x: number; y: number; width: number; height: number }>;
+};
+export function planExpandedFigureCrop(
+  cropBox?: unknown,
+  answerBBox?: unknown,
+  options?: { preserveExtent?: boolean },
+): {
+  cropGemini: [number, number, number, number] | null;
   masks: Array<{ x: number; y: number; width: number; height: number }>;
 };

@@ -1,5 +1,8 @@
 import type { PrintProblem } from "./html";
 
+export const MOCK_SCAN_IMAGE =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
 export const MOCK_CHILD = {
   id: "mock-child-1",
   parent_id: "mock-parent-1",
@@ -30,6 +33,8 @@ export const MOCK_PRINT_PROBLEMS: PrintProblem[] = [
     topicTag: "計算ドリル",
     subject: "math",
     problemType: "calc_block",
+    originalPath: "mock/scan.jpg",
+    originalImageSrc: MOCK_SCAN_IMAGE,
     bbox: [80, 60, 260, 940],
     isCorrect: false,
     questionText: "5 + 4 =",
@@ -43,6 +48,8 @@ export const MOCK_PRINT_PROBLEMS: PrintProblem[] = [
     topicTag: "立体切断",
     subject: "math",
     problemType: "math_geometry_graph",
+    originalPath: "mock/scan.jpg",
+    originalImageSrc: MOCK_SCAN_IMAGE,
     bbox: [830, 60, 980, 940],
     isCorrect: false,
     questionText: "立体を切った切り口はどんな形になりますか。",
@@ -56,6 +63,8 @@ export const MOCK_PRINT_PROBLEMS: PrintProblem[] = [
     topicTag: "つるかめ算",
     subject: "math",
     problemType: "standard",
+    originalPath: "mock/scan.jpg",
+    originalImageSrc: MOCK_SCAN_IMAGE,
     bbox: [480, 60, 820, 940],
     isCorrect: false,
     questionText: "つるとかめが合わせて10ひきいます。足は全部で34本です。",
@@ -69,6 +78,8 @@ export const MOCK_PRINT_PROBLEMS: PrintProblem[] = [
     topicTag: "漢字",
     subject: "japanese",
     problemType: "kanji",
+    originalPath: "mock/scan.jpg",
+    originalImageSrc: MOCK_SCAN_IMAGE,
     bbox: [100, 40, 220, 480],
     isCorrect: false,
     questionText: "「ちゅうい」の「ちゅう」を漢字で書きなさい。",
@@ -83,6 +94,8 @@ export const MOCK_PRINT_PROBLEMS: PrintProblem[] = [
     subject: "japanese",
     problemType: "reading_passage",
     visualType: "passage_based",
+    originalPath: "mock/scan.jpg",
+    originalImageSrc: MOCK_SCAN_IMAGE,
     bbox: [200, 50, 780, 950],
     isCorrect: false,
     questionText: "川の水かさが増えた理由を書きなさい。",
@@ -97,6 +110,8 @@ export const MOCK_PRINT_PROBLEMS: PrintProblem[] = [
     topicTag: "かけ算",
     subject: "math",
     problemType: "calc_block",
+    originalPath: "mock/scan.jpg",
+    originalImageSrc: MOCK_SCAN_IMAGE,
     bbox: [40, 60, 80, 940],
     isCorrect: true,
     studentAnswer: "72",

@@ -7,6 +7,7 @@ import {
   type MistakeType,
 } from "./schema.ts";
 import { isGeminiBBox, normalizeGeminiBBox } from "./bbox.ts";
+import { mentionsDataTable, normalizeOcrText } from "./ocr-text.mjs";
 import {
   enrichCoachingTip,
   inferProblemType,
@@ -55,6 +56,101 @@ function optionalString(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed || undefined;
+}
+
+function readQuestionUnit(obj: Record<string, unknown>) {
+  const unitRaw = obj.question_unit;
+  const unit =
+    unitRaw && typeof unitRaw === "object" && !Array.isArray(unitRaw)
+      ? (unitRaw as Record<string, unknown>)
+      : {};
+  const context = normalizeOcrText(
+    optionalString(unit.parent_context) ??
+      optionalString(unit.context_text) ??
+      optionalString(obj.parent_context) ??
+      optionalString(obj.context_text) ??
+      optionalString(obj.passage_text) ??
+      "",
+  );
+  const options = normalizeOcrText(
+    optionalString(unit.options_text) ??
+      optionalString(obj.options_text) ??
+      optionalString(obj.word_bank) ??
+      "",
+  );
+  const questionFromUnit = optionalString(unit.question_text)
+    ? normalizeOcrText(optionalString(unit.question_text) ?? "")
+    : undefined;
+  const crop = unit.crop_box ?? obj.crop_box;
+  const parentFigure = unit.parent_figure_box ?? obj.parent_figure_box;
+  const subFigure = unit.sub_figure_box ?? obj.sub_figure_box;
+  return { context, options, questionFromUnit, crop, parentFigure, subFigure };
+}
+
+function parseUsableBox(value: unknown): GradeProblem["crop_box"] {
+  if (!isGeminiBBox(value)) return null;
+  const normalized = normalizeGeminiBBox(value);
+  const [ymin, xmin, ymax, xmax] = normalized;
+  if (ymax <= ymin || xmax <= xmin) return null;
+  return normalized;
+}
+
+function sameGeminiBox(
+  a: GradeProblem["crop_box"] | undefined,
+  b: GradeProblem["crop_box"] | undefined,
+): boolean {
+  if (!a || !b) return false;
+  return a[0] === b[0] && a[1] === b[1] && a[2] === b[2] && a[3] === b[3];
+}
+
+/** 表が必須／あった方がよいのに sub_figure_box が空の小問へ、同一プリントの表座標を補う／ページ下部を推定。親図もあるときは両方残す */
+function inferTableBoxBelow(parent: GradeProblem["crop_box"] | null): NonNullable<GradeProblem["crop_box"]> {
+  const p = parseUsableBox(parent);
+  const floor = p
+    ? Math.min(1000, Math.max(Math.max(p[2] + 140, 640), 600))
+    : 680;
+  const capped = Math.min(Math.max(floor, 600), 780);
+  const ymax = 978;
+  if (ymax - capped < 90) {
+    return [Math.max(0, ymax - 180), 40, ymax, 960];
+  }
+  return [capped, 40, ymax, 960];
+}
+
+function fillMissingSubFigureBoxes(problems: GradeProblem[]): GradeProblem[] {
+  const donors = problems
+    .map((problem) => problem.sub_figure_box)
+    .filter((box): box is NonNullable<GradeProblem["crop_box"]> => Boolean(parseUsableBox(box)));
+  const parentDonors = problems
+    .map((problem) => problem.parent_figure_box)
+    .filter((box): box is NonNullable<GradeProblem["crop_box"]> => Boolean(parseUsableBox(box)));
+  return problems.map((problem) => {
+    const needsTable = mentionsDataTable(`${problem.question_text ?? ""} ${problem.context_text ?? ""}`);
+    const hasSub = Boolean(parseUsableBox(problem.sub_figure_box));
+    let parent = parseUsableBox(problem.parent_figure_box) ?? parentDonors[0] ?? null;
+    let visualType = problem.visual_type;
+    if (
+      visualType === "text_only" &&
+      (parent || hasSub || needsTable)
+    ) {
+      visualType = "has_figure";
+    }
+    if (hasSub || !needsTable) {
+      const next = {
+        ...problem,
+        parent_figure_box: parent ?? problem.parent_figure_box,
+        visual_type: visualType,
+      };
+      return next;
+    }
+    const donor = donors.find((box) => !sameGeminiBox(box, parent)) ?? donors[0] ?? inferTableBoxBelow(parent);
+    return {
+      ...problem,
+      parent_figure_box: parent ?? problem.parent_figure_box,
+      sub_figure_box: donor,
+      visual_type: visualType === "passage_based" ? visualType : "has_figure",
+    };
+  });
 }
 
 function asBoolean(value: unknown, path: string): boolean {
@@ -108,9 +204,14 @@ export function normalizeProblem(raw: unknown, index: number): GradeProblem {
   const groundTruth = optionalString(obj.ground_truth);
   const correctAnswer =
     groundTruth || asString(obj.correct_answer, `${path}.correct_answer`);
+  const unit = readQuestionUnit(obj);
   const questionTextRaw =
-    optionalString(obj.question_text) ?? optionalString(obj.questionText) ?? optionalString(obj.prompt) ?? "";
-  const questionText = isQuestionNumberOnly(questionTextRaw) ? "" : questionTextRaw;
+    unit.questionFromUnit ??
+    optionalString(obj.question_text) ??
+    optionalString(obj.questionText) ??
+    optionalString(obj.prompt) ??
+    "";
+  const questionText = isQuestionNumberOnly(questionTextRaw) ? "" : normalizeOcrText(questionTextRaw);
 
   let isCorrect = asBoolean(obj.is_correct, `${path}.is_correct`);
   if (groundTruth && !answersMatchStrict(studentAnswer, groundTruth)) {
@@ -123,8 +224,8 @@ export function normalizeProblem(raw: unknown, index: number): GradeProblem {
       student_answer: studentAnswer,
       ground_truth: groundTruth || correctAnswer,
       correct_answer: correctAnswer,
-      passage_text: optionalString(obj.passage_text) ?? "",
-      word_bank: optionalString(obj.word_bank) ?? "",
+      passage_text: unit.context || optionalString(obj.passage_text) || "",
+      word_bank: unit.options || optionalString(obj.word_bank) || "",
     },
     isCorrect,
   );
@@ -170,21 +271,31 @@ export function normalizeProblem(raw: unknown, index: number): GradeProblem {
     ? parseDifficulty(obj.difficulty_level, `${path}.difficulty_level`)
     : "standard";
 
-  const visualType: VisualType = isVisualType(obj.visual_type)
+  let visualType: VisualType = isVisualType(obj.visual_type)
     ? (obj.visual_type as VisualType)
     : inferVisualType({
         visual_type: obj.visual_type,
         problem_type: inferredType,
         question_text: questionText,
         topic: topicTag,
+        parent_context: unit.context,
+        options_text: unit.options,
+        parent_figure_box: unit.parentFigure,
+        sub_figure_box: unit.subFigure,
       });
 
-  let cropBox: GradeProblem["crop_box"] = null;
-  if (isGeminiBBox(obj.crop_box)) {
-    const normalized = normalizeGeminiBBox(obj.crop_box);
-    const [cropYmin, cropXmin, cropYmax, cropXmax] = normalized;
-    if (cropYmax > cropYmin && cropXmax > cropXmin) cropBox = normalized;
+  let cropBox: GradeProblem["crop_box"] = parseUsableBox(unit.crop);
+  const parentFigureBox = parseUsableBox(unit.parentFigure);
+  const subFigureBox = parseUsableBox(unit.subFigure);
+  if (!cropBox) cropBox = parentFigureBox ?? subFigureBox;
+  if ((parentFigureBox || subFigureBox) && visualType === "text_only") {
+    visualType = "has_figure";
   }
+
+  const contextText = unit.context;
+  const optionsText = unit.options;
+  const passageText =
+    visualType === "passage_based" ? contextText || optionalString(obj.passage_text) || "" : contextText;
 
   return {
     problem_index: problemIndex,
@@ -201,7 +312,11 @@ export function normalizeProblem(raw: unknown, index: number): GradeProblem {
     problem_type: inferredType,
     visual_type: visualType,
     crop_box: cropBox,
-    passage_text: optionalString(obj.passage_text) ?? "",
+    passage_text: passageText,
+    context_text: contextText,
+    options_text: optionsText,
+    parent_figure_box: parentFigureBox,
+    sub_figure_box: subFigureBox,
   };
 }
 
@@ -212,7 +327,9 @@ export function validateGradeResult(raw: unknown): GradeResult {
     throw new GradeValidationError("problems は1件以上必要です");
   }
 
-  const problems = mergeCalcBlocks(obj.problems.map((item, index) => normalizeProblem(item, index)));
+  const problems = fillMissingSubFigureBoxes(
+    mergeCalcBlocks(obj.problems.map((item, index) => normalizeProblem(item, index))),
+  );
 
   let earned: number;
   let max: number;

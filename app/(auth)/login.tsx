@@ -20,6 +20,7 @@ import {
 } from "@/src/features/auth/service";
 import { mapAuthError } from "@/src/features/auth/errors";
 import { isBillingMocked, shouldMockAuth } from "@/src/lib/env";
+import { LegalFooter } from "@/src/components/LegalFooter";
 import { useT } from "@/src/i18n";
 
 export default function LoginScreen() {
@@ -115,6 +116,7 @@ export default function LoginScreen() {
         <Link href={href("/print-preview")} className="mt-3">
           <Text className="text-center text-ink/50">{t("auth.printPreview")}</Text>
         </Link>
+        <LegalFooter />
       </ScrollView>
     </KeyboardAvoidingView>
   );

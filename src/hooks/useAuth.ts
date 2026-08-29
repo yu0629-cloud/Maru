@@ -29,11 +29,17 @@ export function useAuth() {
       }
       const user = session?.user;
       if (!user) return;
+      const isAnonymous = Boolean(user.is_anonymous);
+      if (isAnonymous) {
+        void import("@/src/features/storage/guest-scans").then(({ rememberGuestLocalId }) =>
+          rememberGuestLocalId(user.id),
+        );
+      }
       useAuthStore.getState().setSession({
         userId: user.id,
         email: user.email ?? null,
         displayName: (user.user_metadata?.display_name as string | undefined) ?? "",
-        isAnonymous: Boolean(user.is_anonymous),
+        isAnonymous,
         mocked: false,
       });
     });

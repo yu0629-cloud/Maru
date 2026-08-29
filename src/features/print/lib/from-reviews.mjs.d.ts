@@ -50,9 +50,18 @@ export function printProblemFromReview(item?: object | null): {
   cropBox?: unknown;
   visualType?: string;
   figureCropBox?: unknown;
+  parentFigureBox?: unknown;
+  subFigureBox?: unknown;
   figureImageSrc?: string;
   figureBase64?: string;
+  parentFigureSrc?: string;
+  parentFigureBase64?: string;
+  subFigureSrc?: string;
+  subFigureBase64?: string;
   passageText?: string;
+  contextText?: string;
+  parentContext?: string;
+  optionsText?: string;
   blankedPath: string;
   croppedPath: string;
   originalPath: string;

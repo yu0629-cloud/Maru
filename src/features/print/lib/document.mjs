@@ -6,10 +6,26 @@ import {
   PROBLEM_TYPE_LABELS,
 } from "./problem-types.mjs";
 import { isIncorrectForPrint, isQuestionNumberOnly, stripLatexDollars } from "./from-reviews.mjs";
-import { figureAnswerMasks } from "./bbox.mjs";
-import { figureCropBoxOf, figureDataSrcOf, figureImageSrcOf, inferVisualType, passageTextOf } from "./visual.mjs";
+import { expandFigureGeminiBox, figureAnswerMasks, geminiBBoxToNormalizedBox, intersectNormalized, planExpandedFigureCrop, prepareParentFigureBox } from "./bbox.mjs";
+import { normalizeOcrText } from "./ocr-text.mjs";
+import { figureCropBoxOf, figureDataSrcOf, figureImageSrcOf, inferVisualType, parentContextOf, parentFigureBoxOf, parentFigureSrcOf, passageTextOf, contextTextOf, optionsTextOf, subFigureBoxOf, subFigureSrcOf } from "./visual.mjs";
+import { needsDataTableVisual, resolveSubFigureBox } from "./figure-boxes.mjs";
+import {
+  resolveQuestionNumber,
+  stripLeadingQuestionNumber,
+  formatSquareNumber,
+  formatRoundNumber,
+  matchLeadingQuestionNumber,
+} from "./question-number.mjs";
 
 export { chooseAnswerStyle, problemsPerPage, styleToGridType, ANSWER_STYLE_LABELS, PROBLEM_TYPE_LABELS };
+export {
+  resolveQuestionNumber,
+  stripLeadingQuestionNumber,
+  formatSquareNumber,
+  formatRoundNumber,
+  matchLeadingQuestionNumber,
+} from "./question-number.mjs";
 export {
   toClipItems,
   packClipRows,
@@ -26,11 +42,19 @@ export {
   expandPrintCropBox,
   answerMaskBox,
   figureAnswerMasks,
+  padNormalizedBox,
   shrinkCropExcludingAnswer,
+  usableGeminiBox,
+  expandFigureGeminiBox,
+  planExpandedFigureCrop,
+  prepareParentFigureBox,
 } from "./bbox.mjs";
 
 export const WORKSHEET_PER_PAGE = 6;
 export const PRINT_ROWS_PER_PAGE = 3;
+/** A4 から左右余白 12mm を除いた本文幅・高さ */
+export const A4_CONTENT_WIDTH_MM = 186;
+export const A4_CONTENT_HEIGHT_MM = 273;
 
 const DUMMY_QUESTION = /計算\s*\(\s*1\s*\)|計算ブロック|問計算|ブロック\d*|計算ドリル|^大問\s*\d+$|^漢字\s*\d+$|^読解\s*\d+$|^理科\s*\d+$|^適性検査$|^作図$|^文章題$|^計算$|^適性$/;
 
@@ -62,7 +86,27 @@ export function isRasterImage(src) {
   const value = String(src ?? "");
   if (!value) return false;
   if (value.startsWith("data:image/svg")) return false;
-  return /^(https?:|file:|content:|data:image\/(png|jpe?g|webp))/i.test(value);
+  return /^(https?:|file:|content:|ph:|data:image\/(png|jpe?g|webp))/i.test(value);
+}
+
+export function occupancyFromBox(gemini) {
+  const padded = expandFigureGeminiBox(gemini) ?? gemini;
+  if (!padded) return { widthPct: 100, heightMm: 60 };
+  const ymin = Math.min(padded[0], padded[2]);
+  const xmin = Math.min(padded[1], padded[3]);
+  const ymax = Math.max(padded[0], padded[2]);
+  const xmax = Math.max(padded[1], padded[3]);
+  const heightRatio = Math.min(1, Math.max(0.08, (ymax - ymin) / 1000));
+  const widthRatio = Math.min(1, Math.max(0.2, (xmax - xmin) / 1000));
+  return {
+    widthPct: Math.round(widthRatio * 1000) / 10,
+    heightMm: Math.round(heightRatio * A4_CONTENT_HEIGHT_MM * 10) / 10,
+  };
+}
+
+/** crop_box の元ページ占有率を A4 本文サイズへ写す */
+export function cropOccupancyOf(problem) {
+  return occupancyFromBox(parentFigureBoxOf(problem) || figureCropBoxOf(problem) || subFigureBoxOf(problem));
 }
 
 export function calcExpressionsOf(item) {
@@ -119,7 +163,7 @@ export function extractQuestionText(item) {
 export function formatMathExpression(text) {
   let value = String(text ?? "").replace(/\$/g, "").trim();
   value = stripLatexDollars(value);
-  value = value.replace(/^\(\s*\d+\s*\)\s*/, "");
+  value = stripLeadingQuestionNumber(value);
   const expr = extractMathExpression(value) || value.replace(/\s*[＝=]\s*.*$/, "");
   value = expr.replace(/([0-9０-９)])\s*([+\-×÷＋−*/])\s*(?=[0-9０-９(])/g, "$1 $2 ");
   value = value.replace(/\s+/g, " ").trim();
@@ -127,11 +171,30 @@ export function formatMathExpression(text) {
   return /[＝=]\s*$/.test(value) ? value : `${value} =`;
 }
 
-export function formatProblemStem(text, number) {
+export function formatProblemStem(text, numberOrLabel) {
   const raw = String(text ?? "").trim();
-  const expr = extractMathExpression(raw);
-  const body = expr ? formatMathExpression(expr) : raw.replace(/^\(\s*\d+\s*\)\s*/, "");
-  return `(${number}) ${body}`.trim();
+  const resolved = resolveQuestionNumber({
+    questionText: raw,
+    label: numberOrLabel,
+  });
+  const expr = extractMathExpression(resolved.body || raw);
+  const body = expr
+    ? formatMathExpression(expr)
+    : stripLeadingQuestionNumber(resolved.body || raw);
+  const label =
+    resolved.label ||
+    (numberOrLabel != null && String(numberOrLabel).trim()
+      ? formatRoundNumber(numberOrLabel)
+      : "");
+  return [label, body].filter(Boolean).join(" ").trim();
+}
+
+function numberMarkup(itemOrPart) {
+  const label = String(itemOrPart?.numberLabel ?? "").trim();
+  if (!label) return "";
+  const square = itemOrPart?.numberStyle === "square";
+  const cls = square ? "num num-square" : "num";
+  return `<span class="${cls}">${escapeHtml(label)}</span>`;
 }
 
 function worksheetKind(problem, text) {
@@ -151,61 +214,192 @@ function worksheetLayout(kind, stem, problem) {
 
 function toWorksheetItem(problem, text, number, kind, extra = {}) {
   const cleaned = String(text ?? "").replace(/\$/g, "").trim();
-  const expr = kind === "figure" || kind === "passage" ? "" : extractMathExpression(cleaned);
-  const stem = expr ? formatMathExpression(expr) : cleaned.replace(/\$/g, "").trim();
+  const resolved = resolveQuestionNumber({
+    questionText: cleaned,
+    question_text: problem?.questionText ?? problem?.question_text,
+    prompt: problem?.prompt,
+    problemLabel: problem?.problemLabel ?? problem?.problem_label,
+    problem_label: problem?.problem_label,
+    problemIndex: problem?.problemIndex ?? problem?.problem_index,
+    problem_index: problem?.problem_index,
+    label: problem?.label,
+  });
+  const expr = kind === "figure" || kind === "passage" ? "" : extractMathExpression(resolved.body || cleaned);
+  const stem = expr
+    ? formatMathExpression(expr)
+    : stripLeadingQuestionNumber(resolved.body || cleaned).replace(/\$/g, "").trim();
+  const context = String(extra.context ?? "").trim();
+  const options = String(extra.options ?? "").trim();
+  const figureSrc = extra.figureSrc ?? "";
+  const occupancy = extra.occupancy ?? null;
   const layout =
-    kind === "figure" || kind === "passage" ? "wide" : worksheetLayout(kind, stem, problem);
+    kind === "figure" || kind === "passage" || context || options || figureSrc
+      ? "wide"
+      : worksheetLayout(kind, stem, problem);
+  const numberLabel = resolved.label || (number != null ? formatRoundNumber(number) : "");
+  const numberStyle = resolved.label ? resolved.style : "round";
   return {
-    id: `${problem?.id ?? "p"}-${number}`,
-    number,
+    id: `${problem?.id ?? "p"}-${resolved.token || number}`,
+    number: resolved.token || number,
+    numberLabel,
+    numberStyle,
     kind,
     layout,
     stem,
     visualType: extra.visualType ?? inferVisualType(problem),
-    figureSrc: extra.figureSrc ?? "",
+    figureSrc,
     passage: extra.passage ?? "",
+    context,
+    options,
     masks: extra.masks ?? [],
+    occupancy,
+    parentFigureSrc: extra.parentFigureSrc ?? "",
+    subFigureSrc: extra.subFigureSrc ?? "",
+    parentOccupancy: extra.parentOccupancy ?? occupancy,
+    subOccupancy: extra.subOccupancy ?? null,
+    subMasks: extra.subMasks ?? [],
+    shareScan: extra.shareScan ?? "",
+    shareCrop: extra.shareCrop ?? null,
   };
+}
+
+function scanShareId(problem) {
+  const path = String(problem?.originalPath || problem?.original_path || "").trim();
+  if (path) return path;
+  const src = String(problem?.originalImageSrc || problem?.original_image_src || "").trim();
+  if (!src) return "";
+  return src.replace(/[?#].*$/, "");
+}
+
+function cropsEquivalent(a, b) {
+  try {
+    const A = geminiBBoxToNormalizedBox(a);
+    const B = geminiBBoxToNormalizedBox(b);
+    const hit = intersectNormalized(A, B);
+    if (!hit) return false;
+    const inter = hit.width * hit.height;
+    const union = A.width * A.height + B.width * B.height - inter;
+    return union > 0 && inter / union >= 0.6;
+  } catch {
+    return false;
+  }
+}
+
+function sameSharedFigure(a, b) {
+  if (!a || !b || a.kind !== "figure" || b.kind !== "figure") return false;
+  if (a.shareScan && b.shareScan && a.shareScan !== b.shareScan) return false;
+  if (a.shareCrop && b.shareCrop && cropsEquivalent(a.shareCrop, b.shareCrop)) return true;
+  const ctxA = String(a.context ?? "").trim();
+  const ctxB = String(b.context ?? "").trim();
+  if (ctxA && ctxA === ctxB && (a.shareScan || a.shareCrop || b.shareScan || b.shareCrop)) return true;
+  return false;
+}
+
+function asFigurePart(item) {
+  return {
+    number: item.number,
+    numberLabel: item.numberLabel || "",
+    numberStyle: item.numberStyle || "round",
+    stem: item.stem,
+    options: item.options || "",
+    subFigureSrc: item.subFigureSrc || "",
+    subOccupancy: item.subOccupancy ?? null,
+    subMasks: item.subMasks ?? [],
+  };
+}
+
+/** 同じ大問の共通図は1つにまとめ、小問の設問・解答枠だけを並べる（元番号は正規化済みのまま維持） */
+export function mergeSharedFigureItems(items) {
+  const out = [];
+  for (const item of items ?? []) {
+    const host = item.kind === "figure" ? out.find((row) => sameSharedFigure(row, item)) : null;
+    if (host) {
+      host.parts = host.parts?.length ? host.parts : [asFigurePart(host)];
+      host.parts.push(asFigurePart(item));
+      continue;
+    }
+    out.push({
+      ...item,
+      parts: item.kind === "figure" ? [asFigurePart(item)] : undefined,
+    });
+  }
+  return out;
 }
 
 export function flattenWorksheetItems(problems) {
   const items = [];
   for (const problem of problems ?? []) {
     if (!isIncorrectForPrint(problem)) continue;
-    const visual = inferVisualType(problem);
+    let visual = inferVisualType(problem);
+    const subBoxEarly = resolveSubFigureBox(problem) ?? subFigureBoxOf(problem);
+    const subSrcEarly = subFigureSrcOf(problem);
+    if ((subSrcEarly || subBoxEarly || needsDataTableVisual(problem)) && visual === "text_only") {
+      visual = "has_figure";
+    }
     const figureSrc = figureDataSrcOf(problem) || (isRasterImage(figureImageSrcOf(problem)) ? figureImageSrcOf(problem) : "");
-    const passage = passageTextOf(problem);
+    const context = contextTextOf(problem) || (visual === "passage_based" ? passageTextOf(problem) : "");
+    const options = optionsTextOf(problem);
 
     if (visual === "passage_based") {
       const question = extractQuestionText(problem);
-      const body = passage || question;
-      if (!body || isQuestionNumberOnly(body) || DUMMY_QUESTION.test(body)) continue;
+      const body = context || passageTextOf(problem) || question;
+      if (!body && !options && !question) continue;
+      if (body && (isQuestionNumberOnly(body) || DUMMY_QUESTION.test(body)) && !question && !options) continue;
       items.push(
-        toWorksheetItem(problem, passage ? question : "", items.length + 1, "passage", {
+        toWorksheetItem(problem, question && question !== body ? question : "", items.length + 1, "passage", {
           visualType: visual,
           passage: body,
+          context: body,
+          options,
+          figureSrc,
         }),
       );
       continue;
     }
 
-    if (visual === "has_figure" && figureSrc) {
-      const planned = figureAnswerMasks(
-        figureCropBoxOf(problem),
-        problem?.bbox ?? problem?.gemini_bbox ?? problem?.geminiBbox,
-      );
+    if (visual === "has_figure") {
+      const question = extractQuestionText(problem);
+      const parentSrc = parentFigureSrcOf(problem);
+      const subSrc = subFigureSrcOf(problem);
+      const figureSrc = parentSrc || subSrc || figureDataSrcOf(problem) || (isRasterImage(figureImageSrcOf(problem)) ? figureImageSrcOf(problem) : "");
+      if (!figureSrc && !context && !options && (!question || isQuestionNumberOnly(question) || DUMMY_QUESTION.test(question))) {
+        continue;
+      }
+      const subBox = resolveSubFigureBox(problem) ?? subFigureBoxOf(problem);
+      const parentBox =
+        prepareParentFigureBox(parentFigureBoxOf(problem), subBox) ??
+        parentFigureBoxOf(problem);
+      const answerBox = problem?.bbox ?? problem?.gemini_bbox ?? problem?.geminiBbox;
+      const parentPlan = planExpandedFigureCrop(parentBox || figureCropBoxOf(problem), answerBox, {
+        preserveExtent: true,
+      });
+      const subPlan = subBox
+        ? planExpandedFigureCrop(subBox, answerBox, { preserveExtent: true })
+        : { cropGemini: null, masks: [] };
+      const parentMasks = parentSrc ? parentPlan.masks : [];
+      const subMasks = subSrc ? subPlan.masks : [];
       items.push(
-        toWorksheetItem(problem, "", items.length + 1, "figure", {
+        toWorksheetItem(problem, question, items.length + 1, "figure", {
           visualType: visual,
-          figureSrc,
-          masks: planned.masks,
+          figureSrc: parentSrc || (subSrc ? "" : figureSrc),
+          parentFigureSrc: parentSrc || (subSrc ? "" : figureSrc),
+          subFigureSrc: subSrc,
+          context: parentContextOf(problem) || context,
+          options,
+          masks: parentMasks,
+          occupancy: occupancyFromBox(parentBox || figureCropBoxOf(problem)),
+          parentOccupancy: occupancyFromBox(parentBox || figureCropBoxOf(problem)),
+          subOccupancy: subBox ? occupancyFromBox(subBox) : null,
+          subMasks,
+          shareScan: scanShareId(problem),
+          shareCrop: parentBox || figureCropBoxOf(problem),
         }),
       );
       continue;
     }
 
     const expressions = calcExpressionsOf(problem);
-    if (expressions.length) {
+    if (expressions.length && !context && !options) {
       for (const expression of expressions) {
         if (isQuestionNumberOnly(expression)) continue;
         items.push(toWorksheetItem(problem, expression, items.length + 1, "calc"));
@@ -213,10 +407,16 @@ export function flattenWorksheetItems(problems) {
       continue;
     }
     const text = extractQuestionText(problem);
-    if (!text || isQuestionNumberOnly(text) || DUMMY_QUESTION.test(text)) continue;
-    items.push(toWorksheetItem(problem, text, items.length + 1, worksheetKind(problem, text)));
+    if (!text && !context && !options) continue;
+    if (text && (isQuestionNumberOnly(text) || DUMMY_QUESTION.test(text)) && !context && !options) continue;
+    items.push(
+      toWorksheetItem(problem, text, items.length + 1, worksheetKind(problem, text), {
+        context,
+        options,
+      }),
+    );
   }
-  return items;
+  return mergeSharedFigureItems(items);
 }
 
 export function packWorksheetRows(items) {
@@ -245,9 +445,28 @@ export function packWorksheetRows(items) {
 export function paginateWorksheetRows(rows, maxRows = PRINT_ROWS_PER_PAGE) {
   const pages = [];
   const size = Math.max(1, maxRows);
-  for (let i = 0; i < (rows ?? []).length; i += size) {
-    pages.push(rows.slice(i, i + size));
+  let bucket = [];
+  for (const row of rows ?? []) {
+    const sole = Array.isArray(row) && row.length === 1 ? row[0] : null;
+    const tallFigure =
+      sole &&
+      sole.kind === "figure" &&
+      Boolean(sole.parentFigureSrc || sole.figureSrc || sole.subFigureSrc);
+    if (tallFigure) {
+      if (bucket.length) {
+        pages.push(bucket);
+        bucket = [];
+      }
+      pages.push([row]);
+      continue;
+    }
+    bucket.push(row);
+    if (bucket.length >= size) {
+      pages.push(bucket);
+      bucket = [];
+    }
   }
+  if (bucket.length) pages.push(bucket);
   return pages;
 }
 
@@ -294,20 +513,67 @@ html, body {
   page-break-after: auto;
   break-after: auto;
 }
+.item-row {
+  display: flex;
+  flex-direction: row;
+  gap: 10px;
+  page-break-inside: avoid;
+  break-inside: avoid;
+  margin-bottom: 8px;
+}
+.item-row > .item {
+  flex: 1 1 0;
+  margin-bottom: 0;
+  min-width: 0;
+}
 .item {
   display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  border: 1.5px solid #d0d0d0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  background: #fff;
+  box-sizing: border-box;
+  min-height: 48px;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+.item-compact {
   flex-direction: row;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  border: 1.5px solid #d0d0d0;
-  border-radius: 8px;
-  padding: 10px 14px;
-  margin-bottom: 10px;
-  background: #fff;
-  box-sizing: border-box;
-  min-height: 52px;
-  page-break-inside: avoid;
+}
+.item-head {
+  font-size: 14px;
+  line-height: 1.5;
+  color: #222;
+}
+.item-head .num {
+  font-size: 14px;
+  font-weight: 400;
+  color: #666;
+  margin-right: 8px;
+}
+.item-stem .num {
+  font-size: 14px;
+  font-weight: 400;
+  color: #666;
+  margin-right: 8px;
+}
+.num-square {
+  font-weight: 700;
+  color: #222;
+}
+.item-context {
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.5;
+  color: #333;
+  white-space: pre-wrap;
 }
 .item-stem {
   flex: 1 1 auto;
@@ -320,38 +586,58 @@ html, body {
   overflow-wrap: anywhere;
   word-break: break-word;
 }
-.item-stem .num {
+.item-options {
   font-size: 14px;
   font-weight: 400;
-  color: #666;
-  margin-right: 8px;
+  line-height: 1.5;
+  color: #222;
+  white-space: pre-wrap;
+}
+.item-part {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+.item-part + .item-part {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #eee;
 }
 .answer-box {
   flex: 0 0 auto;
   width: 60px;
   height: 35px;
   border: 2px solid #333;
+  border-radius: 4px;
   box-sizing: border-box;
   background: #fff;
   margin-top: 2px;
 }
-.item-figure {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-}
-.item-figure img {
-  max-width: 100%;
-  max-height: 80mm;
+.item-figure img,
+.figure-media img {
   width: 100%;
+  max-width: 100%;
   height: auto;
   object-fit: contain;
+  object-position: top center;
   display: block;
+  margin: 0 auto;
 }
 .figure-media {
   position: relative;
   width: 100%;
   max-width: 100%;
+  margin: 0 auto;
+  text-align: center;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+.item-figure {
+  page-break-inside: avoid;
+  break-inside: avoid;
 }
 .figure-mask {
   position: absolute;
@@ -359,20 +645,27 @@ html, body {
   pointer-events: none;
 }
 .answer-frame {
-  min-height: 22mm;
+  min-height: 20mm;
   border: 2px solid #333;
   border-radius: 6px;
-  margin-top: 8px;
+  margin-top: 4px;
   background: #fff;
   box-sizing: border-box;
 }
 .passage-block {
   white-space: pre-wrap;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #222;
+  background: #fbfbfb;
 }
 `;
 
 function sanitizeStem(text) {
-  return String(text ?? "")
+  return normalizeOcrText(String(text ?? ""))
     .replace(/\$/g, "")
     .replace(/＄/g, "")
     .replace(/&#36;/gi, "")
@@ -380,58 +673,160 @@ function sanitizeStem(text) {
     .trim();
 }
 
-function worksheetCell(item) {
-  if (item.kind === "figure" && item.figureSrc) {
-    const rawSrc = String(item.figureSrc);
-    const embed = rawSrc.startsWith("data:image/") ? rawSrc : "";
-    const src = escapeHtml(embed);
-    const masks = Array.isArray(item.masks) ? item.masks : [];
-    const maskHtml = embed
-      ? masks
-          .map((mask) => {
-            const left = Number(mask.x) * 100;
-            const top = Number(mask.y) * 100;
-            const width = Number(mask.width) * 100;
-            const height = Number(mask.height) * 100;
-            if (![left, top, width, height].every((n) => Number.isFinite(n))) return "";
-            return `<div class="figure-mask" style="left:${left}%;top:${top}%;width:${width}%;height:${height}%;"></div>`;
-          })
-          .join("")
+/** 大問リード文が小問本文に重複しているときは小問側から除く */
+export function stripRepeatedLead(stem, context) {
+  const s = sanitizeStem(stem);
+  const c = sanitizeStem(context);
+  if (!s) return "";
+  if (!c) return s;
+  if (s === c) return "";
+  if (s.startsWith(c)) {
+    return s.slice(c.length).replace(/^[\s　、。：:]+/u, "").trim();
+  }
+  if (c.length >= 10 && s.includes(c)) {
+    return s.split(c).join(" ").replace(/\s+/g, " ").trim();
+  }
+  return s;
+}
+
+function answerMarkup(kind, hasOptions) {
+  if (kind === "figure" && !hasOptions) return `<div class="answer-frame">&nbsp;</div>`;
+  return `<div style="display: flex; justify-content: flex-end;"><div class="answer-box">&nbsp;</div></div>`;
+}
+
+function figureMediaHtml(rawSrc, occupancy, masks, variant = "") {
+  const embed = String(rawSrc ?? "").startsWith("data:image/") ? String(rawSrc) : "";
+  if (!embed) return "";
+  const src = escapeHtml(embed);
+  const maskHtml = (Array.isArray(masks) ? masks : [])
+    .map((mask) => {
+      const left = Number((Number(mask.x) * 100).toFixed(3));
+      const top = Number((Number(mask.y) * 100).toFixed(3));
+      const width = Number((Number(mask.width) * 100).toFixed(3));
+      const height = Number((Number(mask.height) * 100).toFixed(3));
+      if (![left, top, width, height].every((n) => Number.isFinite(n))) return "";
+      return `<div class="figure-mask" style="left:${left}%;top:${top}%;width:${width}%;height:${height}%;"></div>`;
+    })
+    .join("");
+  const occ =
+    occupancy && Number.isFinite(occupancy.widthPct)
+      ? `style="--crop-w:${Number(occupancy.widthPct)}%;--crop-h:${Number(occupancy.heightMm)}mm;"`
       : "";
-    const image = embed
-      ? `<div class="figure-media">
+  const variantClass = variant ? ` ${variant}` : "";
+  return `<div class="figure-media${variantClass}" ${occ}>
     <img src="${src}" alt="" />
     ${maskHtml}
-  </div>`
-      : "";
-    return `<div class="item item-figure" style="display: flex; flex-direction: column; border: 1.5px solid #d0d0d0; border-radius: 8px; padding: 10px 14px; margin-bottom: 10px; background: #fff; box-sizing: border-box; page-break-inside: avoid;">
-  <div style="font-size: 14px; color: #666; margin-bottom: 8px;">(${item.number})</div>
-  ${image}
-  <div class="answer-frame">&nbsp;</div>
-</div>`;
-  }
+  </div>`;
+}
 
-  if (item.kind === "passage") {
-    const passage = escapeHtml(item.passage || item.stem).replace(/\$/g, "").trim();
-    const stem = escapeHtml(sanitizeStem(item.stem)).replace(/\$/g, "").trim();
-    const same = stem && passage && stem === passage;
-    const question = stem && !same
-      ? `<div style="font-size: 15px; font-weight: 700; color: #222; margin: 8px 0;">(${item.number}) ${stem}</div>`
-      : `<div style="font-size: 15px; color: #666; margin: 8px 0;">(${item.number})</div>`;
-    return `<div class="item item-passage" style="display: flex; flex-direction: column; border: 1.5px solid #d0d0d0; border-radius: 8px; padding: 10px 14px; margin-bottom: 10px; background: #fff; box-sizing: border-box; page-break-inside: avoid;">
-  <div class="passage-block" style="border: 1px solid #ddd; border-radius: 6px; padding: 10px 12px; font-size: 13px; line-height: 1.7; color: #222; background: #fbfbfb;">${passage}</div>
-  ${question}
-  <div style="display: flex; justify-content: flex-end;">
-    <div class="answer-box" style="width: 60px; height: 35px; border: 2px solid #333; display: inline-block; box-sizing: border-box;">&nbsp;</div>
-  </div>
-</div>`;
-  }
+function figurePartsOf(item) {
+  if (Array.isArray(item.parts) && item.parts.length) return item.parts;
+  return [
+    {
+      number: item.number,
+      numberLabel: item.numberLabel || "",
+      numberStyle: item.numberStyle || "round",
+      stem: item.stem,
+      options: item.options || "",
+      subFigureSrc: item.subFigureSrc || "",
+      subOccupancy: item.subOccupancy ?? null,
+      subMasks: item.subMasks ?? [],
+    },
+  ];
+}
 
-  const stem = escapeHtml(sanitizeStem(item.stem)).replace(/\$/g, "").trim();
-  return `<div class="item">
-  <div class="item-stem"><span class="num">(${item.number})</span>${stem}</div>
+function worksheetCell(item) {
+  const rawContext = item.context || (item.kind === "passage" ? item.passage : "");
+  const context = escapeHtml(sanitizeStem(rawContext)).replace(/\$/g, "").trim();
+  const options = escapeHtml(sanitizeStem(item.options)).replace(/\$/g, "").trim();
+  const stem = escapeHtml(
+    stripLeadingQuestionNumber(stripRepeatedLead(item.stem, rawContext)),
+  )
+    .replace(/\$/g, "")
+    .trim();
+  const hasFigureSrc = Boolean(item.parentFigureSrc || item.figureSrc);
+  const compact = item.layout === "compact" && !hasFigureSrc && !context && !options;
+  const num = numberMarkup(item);
+  if (compact) {
+    return `<div class="item item-compact">
+  <div class="item-stem">${num}${stem}</div>
   <div class="answer-box">&nbsp;</div>
 </div>`;
+  }
+  if (item.kind === "figure") {
+    const parts = figurePartsOf(item);
+    const contextBlock = context ? `<div class="item-context">${context}</div>` : "";
+    const parentImage = figureMediaHtml(
+      item.parentFigureSrc || item.figureSrc,
+      item.parentOccupancy || item.occupancy,
+      item.masks,
+      "parent-figure",
+    );
+    const shownSubs = new Set();
+    const partsHtml = parts
+      .map((part) => {
+        const partStem = escapeHtml(
+          stripLeadingQuestionNumber(stripRepeatedLead(part.stem, rawContext)),
+        )
+          .replace(/\$/g, "")
+          .trim();
+        const partOptions = escapeHtml(sanitizeStem(part.options)).replace(/\$/g, "").trim();
+        const subSrc = String(part.subFigureSrc || item.subFigureSrc || "").trim();
+        const subKey = subSrc ? `${subSrc.length}:${subSrc.slice(32, 96)}` : "";
+        let subImage = "";
+        if (subSrc && subKey && !shownSubs.has(subKey)) {
+          shownSubs.add(subKey);
+          subImage = figureMediaHtml(
+            subSrc,
+            part.subOccupancy ?? item.subOccupancy,
+            part.subMasks ?? item.subMasks,
+            "sub-figure",
+          );
+        }
+        const partNum = numberMarkup(part);
+        const question = partStem && partStem !== context
+          ? `<div class="item-stem">${partNum}${partStem}</div>`
+          : `<div class="item-head">${partNum}</div>`;
+        return `<div class="item-part">
+  ${question}
+  ${subImage}
+  ${partOptions ? `<div class="item-options">${partOptions}</div>` : ""}
+  ${answerMarkup("figure", Boolean(partOptions))}
+</div>`;
+      })
+      .join("");
+    return `<div class="item item-figure">
+  ${contextBlock}
+  ${parentImage}
+  ${partsHtml}
+</div>`;
+  }
+  const image = figureMediaHtml(
+    item.parentFigureSrc || item.figureSrc,
+    item.parentOccupancy || item.occupancy,
+    item.masks,
+  );
+  const head = `<div class="item-head">${num}${context && item.kind !== "passage" ? `<span class="item-context">${context}</span>` : ""}</div>`;
+  const passage = item.kind === "passage" && context
+    ? `<div class="passage-block">${context}</div>`
+    : "";
+  const question = stem && stem !== context ? `<div class="item-stem">${stem}</div>` : "";
+  const optionBlock = options ? `<div class="item-options">${options}</div>` : "";
+  const kindClass = item.kind === "passage" ? "item-passage" : "";
+  return `<div class="item ${kindClass}">
+  ${head}
+  ${passage}
+  ${image}
+  ${question}
+  ${optionBlock}
+  ${answerMarkup(item.kind, Boolean(options))}
+</div>`;
+}
+
+function renderWorksheetRow(row) {
+  if (!Array.isArray(row) || row.length === 0) return "";
+  if (row.length === 1) return worksheetCell(row[0]);
+  return `<div class="item-row">${row.map(worksheetCell).join("")}</div>`;
 }
 
 export function buildPrintHtml(input) {
@@ -440,15 +835,18 @@ export function buildPrintHtml(input) {
   let items = flattenWorksheetItems(input.problems ?? []).map((item) => ({
     ...item,
     stem: sanitizeStem(item.stem),
+    context: sanitizeStem(item.context),
+    options: sanitizeStem(item.options),
+    passage: sanitizeStem(item.passage),
   }));
   if (input.scope === "daily") items = items.slice(0, 5);
   const singlePage = input.scope !== "all";
-  const pages = singlePage ? [items] : paginateWorksheetItems(items, WORKSHEET_PER_PAGE);
-  const sheets = pages.map((pageItems, index) => {
+  const rows = packWorksheetRows(items);
+  const pages = singlePage ? [rows] : paginateWorksheetRows(rows, PRINT_ROWS_PER_PAGE);
+  const emptyBody = `<p style="padding: 48px 12px; text-align: center; font-size: 14px; color: #6b7280;">${escapeHtml(input.emptyLabel ?? "間違えた問題はまだありません。")}</p>`;
+  const sheets = pages.map((pageRows, index) => {
     const total = Math.max(1, pages.length);
-    const body = pageItems.length
-      ? pageItems.map(worksheetCell).join("")
-      : `<p style="padding: 48px 12px; text-align: center; font-size: 14px; color: #6b7280;">${escapeHtml(input.emptyLabel ?? "間違えた問題はまだありません。")}</p>`;
+    const body = pageRows.length ? pageRows.map(renderWorksheetRow).join("") : emptyBody;
     const sheetClass = singlePage || pages.length === 1 ? "sheet single" : "sheet";
     return `
     <section class="${sheetClass}">

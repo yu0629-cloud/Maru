@@ -187,7 +187,7 @@ function answersLookCopied(student, ground) {
  */
 export function applyCopiedAnswerGuards(item, isCorrect, pageHay = "") {
   const ground = item.ground_truth || item.correct_answer;
-  const hay = [item.question_text, item.topic, item.passage_text, item.word_bank, ground, pageHay]
+  const hay = [item.question_text, item.topic, item.passage_text, item.context_text, item.options_text, item.word_bank, ground, pageHay]
     .filter(Boolean)
     .join(" ");
   const copied = answersLookCopied(item.student_answer, ground);
@@ -387,11 +387,20 @@ export function parseExtractProblems(raw) {
   const problems = extractProblemList(raw);
   return problems.map((item, index) => {
     const row = item && typeof item === "object" && !Array.isArray(item) ? item : {};
-    const rawPrinted = String(row.question_text ?? row.questionText ?? row.prompt ?? "").trim();
+    const unitRaw = row.question_unit && typeof row.question_unit === "object" && !Array.isArray(row.question_unit)
+      ? row.question_unit
+      : {};
+    const contextText = String(
+      unitRaw.parent_context ?? unitRaw.context_text ?? row.parent_context ?? row.context_text ?? row.passage_text ?? row.passageText ?? "",
+    ).trim();
+    const optionsText = String(unitRaw.options_text ?? row.options_text ?? row.word_bank ?? row.wordBank ?? "").trim();
+    const rawPrinted = String(
+      unitRaw.question_text ?? row.question_text ?? row.questionText ?? row.prompt ?? "",
+    ).trim();
     const printedIsIndex = isQuestionNumberOnly(rawPrinted);
     const printed = printedIsIndex ? "" : rawPrinted;
     const numberLike = String(
-      row.problem_index ?? row.question_number ?? (printedIsIndex ? rawPrinted : ""),
+      row.problem_index ?? row.problem_number ?? row.question_number ?? (printedIsIndex ? rawPrinted : ""),
     ).trim();
     const formulaInIndex = looksLikePrintedFormula(numberLike);
     const problemIndex =
@@ -417,10 +426,16 @@ export function parseExtractProblems(raw) {
         visual_type: row.visual_type ?? row.visualType,
         question_text: questionText,
         topic,
+        parent_context: contextText,
+        options_text: optionsText,
       }),
-      crop_box: parseGeminiBBox(row.crop_box ?? row.cropBox),
-      passage_text: String(row.passage_text ?? row.passageText ?? "").trim(),
-      word_bank: String(row.word_bank ?? row.wordBank ?? "").trim(),
+      crop_box: parseGeminiBBox(unitRaw.crop_box ?? row.crop_box ?? row.cropBox) || parseGeminiBBox(unitRaw.parent_figure_box ?? row.parent_figure_box) || parseGeminiBBox(unitRaw.sub_figure_box ?? row.sub_figure_box),
+      parent_figure_box: parseGeminiBBox(unitRaw.parent_figure_box ?? row.parent_figure_box),
+      sub_figure_box: parseGeminiBBox(unitRaw.sub_figure_box ?? row.sub_figure_box),
+      passage_text: contextText,
+      context_text: contextText,
+      options_text: optionsText,
+      word_bank: optionsText,
     };
   });
 }
@@ -428,7 +443,7 @@ export function parseExtractProblems(raw) {
 export function gradeExtractedProblems(extracted, subjectHint) {
   const total = extracted.length;
   const pageHay = extracted
-    .map((item) => [item.question_text, item.topic, item.word_bank].filter(Boolean).join(" "))
+    .map((item) => [item.question_text, item.topic, item.word_bank, item.options_text, item.context_text].filter(Boolean).join(" "))
     .join(" ");
   const problems = extracted.map((item, index) => {
     const ground = item.ground_truth || item.correct_answer;
@@ -477,9 +492,15 @@ export function gradeExtractedProblems(extracted, subjectHint) {
         problem_type: problemType,
         question_text: item.question_text,
         topic: item.topic,
+        parent_context: item.context_text || item.passage_text,
+        options_text: item.options_text || item.word_bank,
       }),
       crop_box: item.crop_box ?? null,
-      passage_text: item.passage_text || "",
+      passage_text: item.passage_text || item.context_text || "",
+      context_text: item.context_text || item.passage_text || "",
+      options_text: item.options_text || item.word_bank || "",
+      parent_figure_box: item.parent_figure_box ?? null,
+      sub_figure_box: item.sub_figure_box ?? null,
     };
   });
 

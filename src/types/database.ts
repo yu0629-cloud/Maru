@@ -209,6 +209,10 @@ export type Database = {
           visual_type: VisualType | null;
           crop_box: GeminiBBox | null;
           passage_text: string | null;
+          context_text: string | null;
+          options_text: string | null;
+          parent_figure_box: GeminiBBox | null;
+          sub_figure_box: GeminiBBox | null;
           gemini_bbox: GeminiBBox | null;
           cropped_storage_path: string | null;
           blanked_storage_path: string | null;

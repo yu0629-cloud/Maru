@@ -1,4 +1,4 @@
-/** 採点履歴に出すスキャンの絞り込み（無料=7日または最新10枚 / 有料=保持期限） */
+/** 採点履歴に出すスキャンの絞り込み（無料=7日または最新10枚 / ゲスト=7日かつ最新10枚 / 有料=保持期限） */
 
 import {
   daysBetween,
@@ -7,6 +7,7 @@ import {
   originalTtlDays,
   RETENTION,
 } from "./retention.mjs";
+import { GUEST_RETENTION } from "./guest-local.mjs";
 
 export function isScanImageExpired(scan) {
   if (String(scan?.localUri ?? "").trim()) return false;
@@ -43,7 +44,10 @@ export function belongsToActiveChild(scan, childId) {
 }
 
 /**
- * 新しい順。無料は直近7日または最新10枚。有料は TTL 日内。
+ * 新しい順。
+ * - ゲスト: 直近7日 かつ 最新10枚（AND）
+ * - 無料: 直近7日 または 最新10枚（OR・原本ポリシーと揃える）
+ * - 有料: TTL 日内
  */
 export function selectHistoryScans(scans, input = {}) {
   const now = input.now ?? new Date().toISOString();
@@ -66,6 +70,12 @@ export function selectHistoryScans(scans, input = {}) {
       if (delta !== 0) return delta;
       return String(b.id).localeCompare(String(a.id));
     });
+
+  if (input.isAnonymous) {
+    return rows
+      .filter((scan) => daysBetween(scan.createdAt, now) <= GUEST_RETENTION.ttlDays)
+      .slice(0, GUEST_RETENTION.maxScans);
+  }
 
   if (isPaidTier(tier)) {
     return rows.filter((scan) => daysBetween(scan.createdAt, now) <= ttl);

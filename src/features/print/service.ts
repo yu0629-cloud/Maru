@@ -1,6 +1,5 @@
-import { Image, Platform } from "react-native";
+import { Platform } from "react-native";
 import * as FileSystem from "expo-file-system/legacy";
-import * as ImageManipulator from "expo-image-manipulator";
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 import { supabase } from "@/src/lib/supabase/client";
@@ -9,17 +8,19 @@ import { signedStorageUrl } from "@/src/lib/storage/signed-url";
 import { shouldUseRemote } from "@/src/lib/backend";
 import { maruLog, maruStep } from "@/src/lib/debug/maruLog";
 import { t } from "@/src/i18n";
-import { cropFigureToBase64, isRawScanSourceUri, toFileUri } from "@/src/lib/files/scan-image";
+import { isRawScanSourceUri, toFileUri, cropFigureToBase64 } from "@/src/lib/files/scan-image";
 import { isIncorrectForPrint, printProblemFromReview } from "@/src/features/print/from-reviews";
 import {
   buildPrintHtml,
   chooseAnswerStyle,
-  coerceGeminiBox,
-  expandPrintCropBox,
   figureCropBoxOf,
   inferVisualType,
-  resolveCropBox,
+  enrichPrintFigureBoxes,
+  needsDataTableVisual,
+  resolveParentFigureBox,
+  resolveSubFigureBox,
   styleToGridType,
+  subFigureBoxOf,
 } from "@/src/features/print/html";
 import type { PrintDocumentInput, PrintProblem } from "@/src/features/print/html";
 
@@ -47,7 +48,8 @@ async function toPrintableImageSrc(uri?: string | null) {
   const value = String(uri ?? "").trim();
   if (!value) return "";
   if (value.startsWith("data:image/")) return value;
-  if (/^https?:/i.test(value) && Platform.OS !== "web") {
+  if (/^https?:/i.test(value)) {
+    if (Platform.OS === "web") return value;
     try {
       const local = await downloadToCache(value);
       return fileToDataUri(local);
@@ -67,9 +69,10 @@ async function toPrintableImageSrc(uri?: string | null) {
   return "";
 }
 
-function asFigurePayload(dataUri: string) {
-  if (!dataUri.startsWith("data:image/")) return { figureImageSrc: "", figureBase64: "", imageSrc: "" };
-  return { figureImageSrc: dataUri, figureBase64: dataUri, imageSrc: dataUri };
+function isStorageObjectPath(value: string) {
+  const path = String(value ?? "").trim();
+  if (!path) return false;
+  return !/^(https?:|file:|content:|ph:|data:|assets-library:)/i.test(path);
 }
 
 async function downloadToCache(uri: string) {
@@ -80,43 +83,12 @@ async function downloadToCache(uri: string) {
   return result.uri;
 }
 
-function imageSize(uri: string) {
-  return new Promise<{ width: number; height: number }>((resolve, reject) => {
-    Image.getSize(uri, (width, height) => resolve({ width, height }), reject);
-  });
-}
-
-async function cropImageToBox(uri: string, box: { x: number; y: number; width: number; height: number }) {
-  if (Platform.OS === "web") return uri;
-  const local = uri.startsWith("http") ? await downloadToCache(uri) : uri;
-  const { width, height } = await imageSize(local);
-  const originX = Math.round(Math.max(0, box.x) * width);
-  const originY = Math.round(Math.max(0, box.y) * height);
-  const cropW = Math.max(8, Math.round(box.width * width));
-  const cropH = Math.max(8, Math.round(box.height * height));
-  const result = await ImageManipulator.manipulateAsync(
-    local,
-    [
-      {
-        crop: {
-          originX: Math.min(originX, width - 8),
-          originY: Math.min(originY, height - 8),
-          width: Math.min(cropW, width - originX),
-          height: Math.min(cropH, height - originY),
-        },
-      },
-    ],
-    { compress: 0.78, format: ImageManipulator.SaveFormat.JPEG },
-  );
-  return result.uri;
-}
-
 export async function fetchIncorrectProblemsForPrint(childId?: string): Promise<PrintProblem[]> {
   if (!childId || !shouldUseRemote(childId)) return [];
   const { data: problems, error } = await supabase
     .from("problems")
     .select(
-      "id, scan_id, problem_label, question_text, unit, topic_tags, blanked_storage_path, cropped_storage_path, crop_purged_at, blank_purged_at, bounding_box, gemini_bbox, is_correct, student_answer, parent_coaching_tip, correct_answer, subject, problem_type, mistake_type, visual_type, crop_box, passage_text",
+      "id, scan_id, problem_label, question_text, unit, topic_tags, blanked_storage_path, cropped_storage_path, crop_purged_at, blank_purged_at, bounding_box, gemini_bbox, is_correct, student_answer, parent_coaching_tip, correct_answer, subject, problem_type, mistake_type, visual_type, crop_box, passage_text, context_text, options_text, parent_figure_box, sub_figure_box",
     )
     .eq("child_id", childId)
     .or("is_correct.eq.false,is_correct.is.null,mistake_type.eq.blank")
@@ -167,7 +139,13 @@ export async function fetchIncorrectProblemsForPrint(childId?: string): Promise<
       visualType: problem.visual_type ?? undefined,
       figureCropBox: problem.crop_box ?? undefined,
       crop_box: problem.crop_box ?? undefined,
+      parentFigureBox: problem.parent_figure_box ?? undefined,
+      subFigureBox: problem.sub_figure_box ?? undefined,
+      parent_figure_box: problem.parent_figure_box ?? undefined,
+      sub_figure_box: problem.sub_figure_box ?? undefined,
       passageText: problem.passage_text ?? "",
+      contextText: problem.context_text ?? problem.passage_text ?? "",
+      optionsText: problem.options_text ?? "",
       blankedPath: blankPath,
       croppedPath: cropPath,
       originalPath,
@@ -181,9 +159,15 @@ export async function fetchIncorrectProblemsForPrint(childId?: string): Promise<
   }) as PrintProblem[];
 }
 
+function asFigurePayload(dataUri: string) {
+  if (!dataUri.startsWith("data:image/")) return { figureImageSrc: "", figureBase64: "", imageSrc: "" };
+  return { figureImageSrc: dataUri, figureBase64: dataUri, imageSrc: dataUri };
+}
+
 export async function resolvePrintImageUrls(problems: PrintProblem[]): Promise<PrintProblem[]> {
+  const enriched = enrichPrintFigureBoxes(problems);
   return Promise.all(
-    problems.map(async (problem) => {
+    enriched.map(async (problem) => {
       if (problem.mediaExpired) {
         return {
           ...problem,
@@ -191,65 +175,73 @@ export async function resolvePrintImageUrls(problems: PrintProblem[]): Promise<P
           croppedImageSrc: "",
           originalImageSrc: "",
           imageSrc: "",
+          figureImageSrc: "",
+          figureBase64: "",
         };
       }
-      const blankedImageSrc = await signedStorageUrl(
-        STORAGE_BUCKETS.blanks,
-        problem.blankedPath || problem.blankedImageSrc,
-      );
-      const croppedImageSrc = await signedStorageUrl(
-        STORAGE_BUCKETS.crops,
-        problem.croppedPath || problem.croppedImageSrc,
-      );
-      const signedOriginal = await signedStorageUrl(
-        STORAGE_BUCKETS.originals,
-        problem.originalPath || problem.originalImageSrc,
-      );
-      const source = blankedImageSrc || croppedImageSrc || signedOriginal || problem.originalImageSrc || "";
-      const visual = inferVisualType(problem);
+      const signedOriginal = isStorageObjectPath(problem.originalPath ?? "")
+        ? await signedStorageUrl(STORAGE_BUCKETS.originals, problem.originalPath)
+        : "";
+      const needsTable = needsDataTableVisual(problem);
+      const subBox = resolveSubFigureBox(problem) ?? subFigureBoxOf(problem);
+      const parentBox = resolveParentFigureBox(problem);
+      const legacyBox = !parentBox && !subBox ? figureCropBoxOf(problem) : null;
+      let visual = inferVisualType(problem);
+      if ((needsTable || parentBox || subBox || legacyBox) && visual !== "passage_based") {
+        visual = "has_figure";
+      }
       if (visual === "has_figure") {
-        const geminiCrop = figureCropBoxOf(problem) ?? coerceGeminiBox(problem.bbox) ?? [0, 0, 1000, 1000];
-        const rawSource = [problem.originalImageSrc, signedOriginal, source]
+        const rawSource = [problem.originalImageSrc, signedOriginal]
           .map((uri) => String(uri ?? "").trim())
           .find((uri) => isRawScanSourceUri(uri));
         maruLog("figure", "resolvePrintImageUrls", {
           id: problem.id,
           visual,
-          visualType: problem.visualType,
-          problemType: problem.problemType,
+          needsTable,
           sourceUri: String(rawSource ?? "").slice(0, 120),
-          originalImageSrc: String(problem.originalImageSrc ?? "").slice(0, 80),
-          originalPath: problem.originalPath ?? "",
-          signedOriginal: String(signedOriginal ?? "").slice(0, 80),
-          cropBox: geminiCrop,
-          hasCropBox: Boolean(figureCropBoxOf(problem)),
+          parentBox,
+          subBox,
+          cropBox: legacyBox,
         });
+        if (!parentBox && !subBox && !legacyBox) {
+          maruLog("figure", "fallback to text: no crop_box", { id: problem.id });
+          return { ...problem, ...asFigurePayload(""), parentFigureSrc: "", subFigureSrc: "" };
+        }
         try {
-          const existing = String(problem.figureBase64 || problem.figureImageSrc || "").trim();
-          let printable = "";
-          if (rawSource) {
-            printable =
+          const cropOne = async (box: typeof parentBox, suffix: string) => {
+            if (!box || !rawSource) return "";
+            return (
               (await cropFigureToBase64({
                 sourceUri: rawSource,
-                cropBox: geminiCrop,
+                cropBox: box,
                 scanId: String(problem.originalPath || problem.id),
-                problemId: String(problem.id),
+                problemId: `${problem.id}-${suffix}`,
                 answerBBox: problem.bbox ?? null,
-                visualType: visual,
-              })) ?? "";
-          } else {
-            maruLog("figure", "no source uri — cannot crop", { id: problem.id });
-          }
-          if (!printable.startsWith("data:image/")) {
-            printable = existing.startsWith("data:image/") ? existing : await toPrintableImageSrc(existing);
-          }
-          if (!printable.startsWith("data:image/")) {
-            maruLog("figure", "fallback to text: no figureBase64", { id: problem.id });
-            return { ...problem, ...asFigurePayload("") };
+                visualType: "has_figure",
+              })) ?? ""
+            );
+          };
+          const parentSrc = await cropOne(parentBox || legacyBox, "p");
+          const subSrc = await cropOne(subBox, "s");
+          const printable = parentSrc.startsWith("data:image/")
+            ? parentSrc
+            : subSrc.startsWith("data:image/")
+              ? subSrc
+              : "";
+          if (!printable) {
+            maruLog("figure", "fallback to text: raw crop failed", { id: problem.id });
+            return { ...problem, ...asFigurePayload(""), parentFigureSrc: "", subFigureSrc: "" };
           }
           return {
             ...problem,
+            visualType: "has_figure",
             ...asFigurePayload(printable),
+            parentFigureBox: parentBox ?? problem.parentFigureBox,
+            subFigureBox: subBox ?? problem.subFigureBox,
+            parentFigureSrc: parentSrc.startsWith("data:image/") ? parentSrc : "",
+            parentFigureBase64: parentSrc.startsWith("data:image/") ? parentSrc : "",
+            subFigureSrc: subSrc.startsWith("data:image/") ? subSrc : "",
+            subFigureBase64: subSrc.startsWith("data:image/") ? subSrc : "",
             originalImageSrc: await toPrintableImageSrc(signedOriginal || problem.originalImageSrc || ""),
           };
         } catch (error) {
@@ -257,39 +249,10 @@ export async function resolvePrintImageUrls(problems: PrintProblem[]): Promise<P
             id: problem.id,
             error: error instanceof Error ? error.message : error,
           });
-          const existing = String(problem.figureBase64 || problem.figureImageSrc || "").trim();
-          const printable = existing.startsWith("data:image/") ? existing : await toPrintableImageSrc(existing);
-          return { ...problem, ...asFigurePayload(printable) };
+          return { ...problem, ...asFigurePayload(""), parentFigureSrc: "", subFigureSrc: "" };
         }
       }
-      if (!source) {
-        return { ...problem, imageSrc: "", originalImageSrc: "", printCropped: false, figureImageSrc: "" };
-      }
-      const alreadyCropped = Boolean(blankedImageSrc || croppedImageSrc);
-      try {
-        const box = expandPrintCropBox(resolveCropBox(problem));
-        const croppedUri = alreadyCropped ? source : await cropImageToBox(source, box);
-        const printable = await toPrintableImageSrc(croppedUri);
-        return {
-          ...problem,
-          imageSrc: croppedUri.startsWith("file:") ? croppedUri : printable,
-          originalImageSrc: printable,
-          blankedImageSrc: blankedImageSrc ? printable : "",
-          croppedImageSrc: croppedImageSrc ? printable : "",
-          isBlanked: Boolean(blankedImageSrc || problem.isBlanked),
-          printCropped: !alreadyCropped,
-          cropBox: box,
-        };
-      } catch (error) {
-        maruLog("print", "crop skip", { id: problem.id, error: error instanceof Error ? error.message : error });
-        const printable = await toPrintableImageSrc(source);
-        return {
-          ...problem,
-          imageSrc: printable,
-          originalImageSrc: printable,
-          printCropped: false,
-        };
-      }
+      return problem;
     }),
   );
 }

@@ -29,7 +29,12 @@ const {
   figureAnswerMasks,
   shrinkCropExcludingAnswer,
   coerceGeminiBox,
+  cropOccupancyOf,
   geminiBoxToPixelCrop,
+  expandFigureGeminiBox,
+  prepareParentFigureBox,
+  planExpandedFigureCrop,
+  stripRepeatedLead,
 } = await import(pathToFileURL(printLib).href);
 const { applyReviewResult, isolateLeeches, selectDailyReviews } = await import(
   pathToFileURL(reviewLib).href
@@ -38,6 +43,9 @@ const { applyReviewResult, isolateLeeches, selectDailyReviews } = await import(
 function pass(name) {
   console.log(`ok - ${name}`);
 }
+
+const SCAN_PNG =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
 assert.equal(chooseAnswerStyle({ topicTag: "つるかめ算", subject: "math" }), "graph");
 assert.equal(chooseAnswerStyle({ topicTag: "漢字", subject: "japanese" }), "kanji");
@@ -61,12 +69,21 @@ pass("短い計算は2列、図形・長文は1列にする");
 const figureCrop = { x: 0.05, y: 0.1, width: 0.9, height: 0.5 };
 const rightAnswer = { x: 0.78, y: 0.42, width: 0.14, height: 0.12 };
 const shrunkFigure = shrinkCropExcludingAnswer(figureCrop, rightAnswer);
-assert.ok(shrunkFigure.width < figureCrop.width);
-assert.ok(shrunkFigure.x + shrunkFigure.width <= rightAnswer.x + 0.01);
-const masked = figureAnswerMasks([100, 50, 600, 950], [420, 780, 540, 920]);
+assert.deepEqual(shrunkFigure, figureCrop);
+const narrowCrop = { x: 0.1, y: 0.4, width: 0.4, height: 0.12 };
+const shrunkNarrow = shrinkCropExcludingAnswer(narrowCrop, { x: 0.38, y: 0.42, width: 0.1, height: 0.08 });
+assert.ok(shrunkNarrow.width < narrowCrop.width);
+const preserved = shrinkCropExcludingAnswer(narrowCrop, { x: 0.38, y: 0.42, width: 0.1, height: 0.08 }, { preserveExtent: true });
+assert.deepEqual(preserved, narrowCrop);
+const masked = figureAnswerMasks([100, 50, 600, 950], [420, 780, 540, 920], { preserveExtent: true });
 assert.ok(masked.crop);
+assert.equal(masked.crop.width, 0.9);
 assert.ok(Array.isArray(masked.masks));
-pass("図の切り抜きから右下の解答欄を除外する");
+const planned = planExpandedFigureCrop([100, 50, 500, 950], [420, 780, 540, 920], { preserveExtent: true });
+assert.ok(planned.cropGemini);
+assert.ok(planned.cropGemini[1] < 50);
+assert.ok(planned.cropGemini[3] > 950);
+pass("大問図は枠を維持し、狭い切り抜きだけ解答欄を除外する");
 
 const thinAnswer = geminiBBoxToNormalizedBox([170, 119, 213, 513]);
 assert.ok(thinAnswer.height < 0.05);
@@ -89,35 +106,39 @@ const thinClips = toClipItems([
 assert.equal(thinClips[0].label, "問2");
 assert.equal(thinClips[0].mask.kind, "right");
 assert.ok(thinClips[0].mask.x >= 0.6);
+const thinHtmlProblems = [
+  {
+    id: "thin",
+    label: "2",
+    topicTag: "足し算",
+    bbox: [170, 119, 213, 513],
+    isCorrect: false,
+    questionText: "5 + 4 =",
+    originalImageSrc: "https://example.com/scan.jpg",
+    correctAnswer: "6",
+    parentCoachingTip: "",
+  },
+];
 const thinHtml = buildPrintHtml({
   title: "お直し",
   childName: "はると",
   dateLabel: "2026年8月27日",
-  problems: [
-    {
-      id: "thin",
-      label: "2",
-      topicTag: "足し算",
-      bbox: [170, 119, 213, 513],
-      isCorrect: false,
-      questionText: "5 + 4 =",
-      originalImageSrc: "https://example.com/scan.jpg",
-      correctAnswer: "6",
-      parentCoachingTip: "",
-    },
-  ],
+  problems: thinHtmlProblems,
 });
-assert.match(thinHtml, /\(1\)/);
+assert.match(thinHtml, /\(2\)/);
 assert.match(thinHtml, /answer-box/);
+assert.match(thinHtml, /5 \+ 4/);
+assert.doesNotMatch(thinHtml, /\(1\)\(2\)/);
+assert.doesNotMatch(thinHtml, /scan-frame/);
 assert.doesNotMatch(thinHtml, /<img/);
 pass("解答欄だけの bbox でも画像ではなくテキストと解答枠で印字する");
 
 const printProblems = [
-  { id: "ok", label: "かけ算", problemType: "calc_block", bbox: [40, 60, 80, 940], isCorrect: true, studentAnswer: "72", correctAnswer: "72", parentCoachingTip: "" },
-  { id: "c1", label: "計算", problemType: "calc_block", bbox: [80, 60, 260, 940], isCorrect: false, questionText: "3 + 4 =", studentAnswer: "43", correctAnswer: "34", parentCoachingTip: "" },
-  { id: "c2", label: "漢字", problemType: "kanji", bbox: [100, 40, 220, 480], isCorrect: false, questionText: "「ちゅうい」の「ちゅう」", studentAnswer: "注", correctAnswer: "注", parentCoachingTip: "" },
-  { id: "g", label: "大問3", problemType: "math_geometry_graph", bbox: [830, 60, 980, 940], isCorrect: false, questionText: "切り口はどんな形ですか", studentAnswer: "", correctAnswer: "正六角形", parentCoachingTip: "" },
-  { id: "r", label: "読解", problemType: "reading_passage", bbox: [200, 50, 780, 950], isCorrect: false, questionText: "空欄に入る言葉を書きなさい", studentAnswer: "川", originalImageSrc: "https://example.com/scan.jpg", correctAnswer: "雨", parentCoachingTip: "" },
+  { id: "ok", label: "かけ算", problemType: "calc_block", bbox: [40, 60, 80, 940], isCorrect: true, studentAnswer: "72", originalImageSrc: SCAN_PNG, originalPath: "scans/a.jpg", correctAnswer: "72", parentCoachingTip: "" },
+  { id: "c1", label: "計算", problemType: "calc_block", bbox: [80, 60, 260, 940], isCorrect: false, questionText: "3 + 4 =", studentAnswer: "43", originalImageSrc: SCAN_PNG, originalPath: "scans/a.jpg", correctAnswer: "34", parentCoachingTip: "" },
+  { id: "c2", label: "漢字", problemType: "kanji", bbox: [100, 40, 220, 480], isCorrect: false, questionText: "「ちゅうい」の「ちゅう」", studentAnswer: "注", originalImageSrc: SCAN_PNG, originalPath: "scans/a.jpg", correctAnswer: "注", parentCoachingTip: "" },
+  { id: "g", label: "大問3", problemType: "math_geometry_graph", bbox: [830, 60, 980, 940], isCorrect: false, questionText: "切り口はどんな形ですか", studentAnswer: "", originalImageSrc: SCAN_PNG, originalPath: "scans/a.jpg", correctAnswer: "正六角形", parentCoachingTip: "" },
+  { id: "r", label: "読解", problemType: "reading_passage", bbox: [200, 50, 780, 950], isCorrect: false, questionText: "空欄に入る言葉を書きなさい", studentAnswer: "川", originalImageSrc: SCAN_PNG, originalPath: "scans/a.jpg", correctAnswer: "雨", parentCoachingTip: "" },
 ];
 const clips = toClipItems(printProblems);
 assert.equal(clips.length, 4);
@@ -147,12 +168,12 @@ assert.match(html, /page-break-inside: avoid/);
 assert.match(html, /white-space:\s*normal/);
 assert.match(html, /flex-direction:\s*row/);
 assert.doesNotMatch(html, /height:\s*297mm/);
-assert.doesNotMatch(html, /<img/);
-assert.doesNotMatch(html, /class="mask"/);
+assert.doesNotMatch(html, /scan-frame/);
 assert.doesNotMatch(html, /css-crop/);
 assert.doesNotMatch(html, /保護者用カンペ/);
 assert.doesNotMatch(html, /声かけ/);
-pass("PDF は名前・日付を印字し、テキストと解答枠だけで構成する");
+assert.match(html, /3 \+ 4/);
+pass("PDF は間違えた問題だけを集約し、テキストと解答枠で構成する");
 
 const { collectPrintProblems, isIncorrectForPrint, isBlankPrintAnswer, displayQuestionText, displayTopicTag, stripLatexDollars, hasPrintableQuestion, selectProblemsForScope, DAILY_PRINT_MAX } = await import(
   pathToFileURL(join(root, "src/features/print/lib/from-reviews.mjs")).href,
@@ -224,7 +245,81 @@ assert.equal(looksLikeMath("3"), false);
 assert.equal(looksLikeMath("0 + 7 ="), true);
 const stems = flattenWorksheetItems(fromNumberOnly);
 assert.match(stems[0].stem, /0 \+ 7/);
+assert.equal(stems[0].numberLabel, "(3)");
+assert.equal(stems[0].numberStyle, "round");
 pass("問番号ではなく問題文・数式を復習プリントに出す");
+
+const {
+  resolveQuestionNumber,
+  formatSquareNumber,
+  formatRoundNumber,
+} = await import(pathToFileURL(join(root, "src/features/print/lib/question-number.mjs")).href);
+assert.equal(formatSquareNumber("1"), "[ 1 ]");
+assert.equal(formatRoundNumber("3"), "(3)");
+assert.equal(resolveQuestionNumber({ questionText: "① 支点はどれですか" }).label, "(1)");
+assert.equal(resolveQuestionNumber({ questionText: "【2】次の問いに答えなさい" }).label, "[ 2 ]");
+assert.equal(resolveQuestionNumber({ questionText: "■3 実験について" }).label, "[ 3 ]");
+assert.equal(resolveQuestionNumber({ questionText: "[4] 正しいものを選べ" }).label, "[ 4 ]");
+assert.equal(resolveQuestionNumber({ questionText: "1⃣ 左のうで" }).label, "[ 1 ]");
+assert.equal(resolveQuestionNumber({ questionText: "(a) 記号を書きなさい" }).label, "(a)");
+assert.equal(resolveQuestionNumber({ questionText: "2. おもりの重さ" }).label, "(2)");
+assert.equal(resolveQuestionNumber({ label: "大問1" }).label, "[ 1 ]");
+assert.equal(resolveQuestionNumber({ label: "大問1 (2)" }).label, "(2)");
+const numberedStem = flattenWorksheetItems([
+  {
+    id: "n3",
+    label: "1",
+    topicTag: "てこ",
+    visualType: "text_only",
+    questionText: "(3) 実験の結果を表にまとめると、正しいものを選びなさい。",
+    isCorrect: false,
+    correctAnswer: "1",
+    parentCoachingTip: "",
+  },
+]);
+assert.equal(numberedStem[0].numberLabel, "(3)");
+assert.equal(numberedStem[0].numberStyle, "round");
+assert.doesNotMatch(numberedStem[0].stem, /^\s*\(3\)/);
+const numberedHtml = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月29日",
+  problems: [
+    {
+      id: "n3",
+      label: "1",
+      topicTag: "てこ",
+      visualType: "text_only",
+      questionText: "(3) 実験の結果を表にまとめると、正しいものを選びなさい。",
+      isCorrect: false,
+      correctAnswer: "1",
+      parentCoachingTip: "",
+    },
+  ],
+});
+assert.match(numberedHtml, /class="num">\(3\)</);
+assert.doesNotMatch(numberedHtml, /\(1\)\s*\(3\)/);
+assert.doesNotMatch(numberedHtml, /\(1\)\(3\)/);
+const squareHtml = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月29日",
+  problems: [
+    {
+      id: "sq",
+      label: "大問1",
+      topicTag: "てこ",
+      visualType: "text_only",
+      questionText: "【1】てこについて答えなさい。",
+      isCorrect: false,
+      correctAnswer: "支点",
+      parentCoachingTip: "",
+    },
+  ],
+});
+assert.match(squareHtml, /num-square/);
+assert.match(squareHtml, /\[ 1 \]/);
+pass("設問番号を元プリント記号に応じて正規化し二重連番を出さない");
 
 assert.equal(displayQuestionText("14", "14"), "");
 assert.equal(displayQuestionText("2 + 6 =", "14"), "2 + 6 =");
@@ -271,15 +366,17 @@ const manyWrong = Array.from({ length: 8 }, (_, index) => ({
   question_text: `${index + 2} + ${index + 3} =`,
   student_answer: "0",
   correct_answer: String(index * 2 + 5),
+  bbox: [80 + index * 100, 60, 160 + index * 100, 940],
 }));
+const dailyScan = { childId: "child-1", localUri: SCAN_PNG, originalStoragePath: "scans/a.jpg", problems: manyWrong };
 const dailyPick = collectPrintProblems({
   childId: "child-1",
-  scans: [{ childId: "child-1", problems: manyWrong }],
+  scans: [dailyScan],
   scope: "daily",
 });
 const allPick = collectPrintProblems({
   childId: "child-1",
-  scans: [{ childId: "child-1", problems: manyWrong }],
+  scans: [dailyScan],
   scope: "all",
 });
 assert.equal(DAILY_PRINT_MAX, 5);
@@ -335,11 +432,13 @@ const withBlanks = collectPrintProblems({
   scans: [
     {
       childId: "child-1",
+      localUri: SCAN_PNG,
+      originalStoragePath: "scans/blank.jpg",
       problems: [
-        { id: "ok", is_correct: true, problem_label: "1+1", student_answer: "2", correct_answer: "2" },
-        { id: "miss", is_correct: false, problem_label: "2+2", student_answer: "5", correct_answer: "4" },
-        { id: "blank", is_correct: false, problem_label: "0+7", student_answer: "", correct_answer: "7", mistake_type: "blank" },
-        { id: "unanswered", is_correct: true, problem_label: "5+3", student_answer: "", correct_answer: "8" },
+        { id: "ok", is_correct: true, problem_label: "1+1", student_answer: "2", correct_answer: "2", bbox: [40, 60, 80, 940] },
+        { id: "miss", is_correct: false, problem_label: "2+2", student_answer: "5", correct_answer: "4", bbox: [80, 60, 160, 940] },
+        { id: "blank", is_correct: false, problem_label: "0+7", student_answer: "", correct_answer: "7", mistake_type: "blank", bbox: [160, 60, 240, 940] },
+        { id: "unanswered", is_correct: true, problem_label: "5+3", student_answer: "", correct_answer: "8", bbox: [240, 60, 320, 940] },
       ],
     },
   ],
@@ -355,6 +454,7 @@ assert.match(blankHtml, /0 \+ 7/);
 assert.match(blankHtml, /5 \+ 3/);
 assert.match(blankHtml, /2 \+ 2/);
 assert.doesNotMatch(blankHtml, /1 \+ 1/);
+assert.match(blankHtml, /answer-box/);
 pass("空欄・未回答も解き直し対象としてテキスト印字する");
 
 const textHtml = buildPrintHtml({
@@ -399,6 +499,19 @@ assert.equal(inferVisualType({ visualType: "has_figure" }), "has_figure");
 assert.equal(inferVisualType({ problemType: "calc_block" }), "text_only");
 assert.equal(inferVisualType({ problemType: "math_geometry_graph" }), "has_figure");
 assert.equal(inferVisualType({ problemType: "reading_passage" }), "passage_based");
+assert.equal(inferVisualType({ questionText: "下線部①の意味を答えなさい。" }), "passage_based");
+assert.equal(inferVisualType({ questionText: "会話文を読んで答えなさい。" }), "passage_based");
+assert.equal(inferVisualType({ questionText: "次の資料を見て答えなさい。" }), "has_figure");
+assert.equal(inferVisualType({ questionText: "下の表にまとめなさい。" }), "has_figure");
+assert.equal(
+  inferVisualType({
+    visualType: "text_only",
+    questionText: "(6) 実験の結果を表にまとめると、正しいものをすべて選びなさい。",
+    parent_figure_box: [40, 50, 380, 950],
+    sub_figure_box: [500, 80, 720, 900],
+  }),
+  "has_figure",
+);
 assert.deepEqual(figureCropBoxOf({ crop_box: [10, 20, 30, 40] }), [10, 20, 30, 40]);
 assert.deepEqual(figureCropBoxOf({ crop_box: "[50,60,70,80]" }), [50, 60, 70, 80]);
 assert.deepEqual(figureCropBoxOf({ crop_box: { 0: 1, 1: 2, 2: 3, 3: 4 } }), [1, 2, 3, 4]);
@@ -415,7 +528,48 @@ assert.equal(half.originX, 250);
 assert.equal(half.originY, 250);
 assert.equal(half.width, 500);
 assert.equal(half.height, 500);
+const filePx = geminiBoxToPixelCrop([100, 200, 300, 600], 500, 800);
+assert.ok(filePx);
+assert.equal(filePx.originX, 100);
+assert.equal(filePx.originY, 80);
+assert.equal(filePx.width, 200);
+assert.equal(filePx.height, 160);
 pass("crop_box の JSON 文字列・正規化座標をピクセルに変換する");
+const paddedFigure = expandFigureGeminiBox([100, 50, 500, 950]);
+assert.ok(paddedFigure);
+assert.ok(paddedFigure[0] < 100);
+assert.ok(paddedFigure[1] < 50);
+assert.ok(paddedFigure[2] > 500);
+assert.ok(paddedFigure[3] > 950);
+assert.ok(paddedFigure[1] <= 20);
+assert.ok(paddedFigure[2] >= 530);
+const paddedRight = expandFigureGeminiBox([100, 50, 500, 800]);
+assert.ok(paddedRight);
+assert.ok(paddedRight[3] >= 840);
+const paddedLeft = expandFigureGeminiBox([100, 200, 500, 800]);
+assert.ok(paddedLeft);
+assert.ok(paddedLeft[1] <= 165);
+const parentAboveTable = prepareParentFigureBox([40, 50, 380, 950], [420, 80, 680, 900]);
+assert.deepEqual(parentAboveTable, [40, 50, 380, 950]);
+const parentFarFromTable = prepareParentFigureBox([40, 50, 380, 950], [720, 80, 960, 900]);
+assert.deepEqual(parentFarFromTable, [40, 50, 380, 950]);
+const parentIntoTable = prepareParentFigureBox([40, 50, 500, 950], [420, 80, 680, 900]);
+assert.ok(parentIntoTable);
+assert.ok(parentIntoTable[2] < 420);
+const expandedIntoTable = expandFigureGeminiBox(parentIntoTable);
+assert.ok(expandedIntoTable);
+assert.ok(expandedIntoTable[2] <= 420 + 2);
+assert.equal(
+  stripRepeatedLead(
+    "下の図のような手順で、てこが水平につり合うのはどれですか。(6) 実験の結果を表にまとめると、正しいものをすべて選びなさい。",
+    "下の図のような手順で、てこが水平につり合うのはどれですか。",
+  ),
+  "(6) 実験の結果を表にまとめると、正しいものをすべて選びなさい。",
+);
+const occupancy = cropOccupancyOf({ figureCropBox: [100, 50, 500, 950] });
+assert.ok(occupancy.widthPct >= 95);
+assert.ok(occupancy.heightMm >= 114);
+pass("crop_box の元ページ占有率を A4 本文へ写す");
 const { printProblemFromReview } = await import(pathToFileURL(join(root, "src/features/print/lib/from-reviews.mjs")).href);
 const fromJsonCrop = printProblemFromReview({
   id: "json-crop",
@@ -443,6 +597,7 @@ const figureHtml = buildPrintHtml({
       visualType: "has_figure",
       problemType: "math_geometry_graph",
       figureImageSrc: FIGURE_PNG,
+      figureCropBox: [100, 50, 500, 950],
       questionText: "何時何分ですか",
       isCorrect: false,
       correctAnswer: "3時20分",
@@ -465,7 +620,7 @@ const fromBase64Only = buildPrintHtml({
       visualType: "has_figure",
       problemType: "math_geometry_graph",
       figureBase64: FIGURE_PNG,
-      questionText: "これは出さない",
+      questionText: "角度を求めなさい",
       isCorrect: false,
       correctAnswer: "1",
       parentCoachingTip: "",
@@ -473,14 +628,19 @@ const fromBase64Only = buildPrintHtml({
   ],
 });
 assert.match(fromBase64Only, /<img src="data:image/);
-assert.doesNotMatch(fromBase64Only, /これは出さない/);
+assert.match(fromBase64Only, /角度を求めなさい/);
 assert.match(figureHtml, /object-fit:\s*contain/);
-assert.match(figureHtml, /max-height:\s*80mm/);
+assert.match(figureHtml, /height:\s*auto/);
+assert.doesNotMatch(figureHtml, /object-fit:\s*cover/);
+assert.doesNotMatch(figureHtml, /max-height:\s*var\(--crop-h/);
+assert.match(figureHtml, /--crop-w:100%/);
+assert.match(figureHtml, /--crop-h:125\.6mm/);
+assert.match(figureHtml, /parent-figure/);
+assert.doesNotMatch(figureHtml, /max-height:\s*68mm/);
 assert.match(figureHtml, /answer-frame/);
 assert.doesNotMatch(figureHtml, /figure-work/);
-assert.doesNotMatch(figureHtml, /何時何分ですか/);
+assert.match(figureHtml, /何時何分ですか/);
 assert.equal((figureHtml.match(/class="answer-frame"/g) ?? []).length, 1);
-assert.doesNotMatch(figureHtml, /class="answer-box"/);
 const figureMasked = buildPrintHtml({
   title: "お直し",
   childName: "はると",
@@ -495,7 +655,9 @@ const figureMasked = buildPrintHtml({
       figureImageSrc: FIGURE_PNG,
       figureCropBox: [0, 0, 1000, 1000],
       bbox: [100, 100, 900, 900],
+      contextText: "下の図のような手順で、てこが水平につり合うのはどれですか。",
       questionText: "すべて選び",
+      optionsText: "① 支点からのきょりが2倍 ② おもりを2倍 ③ 力点と作用点を入れかえる",
       isCorrect: false,
       correctAnswer: "1,3",
       parentCoachingTip: "",
@@ -503,7 +665,10 @@ const figureMasked = buildPrintHtml({
   ],
 });
 assert.match(figureMasked, /figure-mask/);
-assert.doesNotMatch(figureMasked, /すべて選び/);
+assert.match(figureMasked, /すべて選び/);
+assert.match(figureMasked, /てこが水平につり合う/);
+assert.match(figureMasked, /支点からのきょり/);
+assert.match(figureMasked, /answer-box/);
 const figureFallback = buildPrintHtml({
   title: "お直し",
   childName: "はると",
@@ -551,9 +716,349 @@ assert.doesNotMatch(passageHtml, /<img/);
 assert.match(passageHtml, /answer-box/);
 pass("図形は切り抜き画像、欠けたらテキスト、長文は本文＋設問で印字する");
 
+const groupedProblems = [
+  {
+    id: "clock-1",
+    label: "1",
+    topicTag: "時計",
+    visualType: "has_figure",
+    problemType: "math_geometry_graph",
+    originalPath: "scans/clock.jpg",
+    figureBase64: FIGURE_PNG,
+    figureCropBox: [200, 200, 700, 800],
+    questionText: "何時何分ですか",
+    isCorrect: false,
+    correctAnswer: "3時20分",
+    parentCoachingTip: "",
+  },
+  {
+    id: "clock-2",
+    label: "2",
+    topicTag: "時計",
+    visualType: "has_figure",
+    problemType: "math_geometry_graph",
+    originalPath: "scans/clock.jpg",
+    figureBase64: FIGURE_PNG,
+    figureCropBox: [210, 190, 690, 810],
+    questionText: "あと何分で4時ですか",
+    isCorrect: false,
+    correctAnswer: "40分",
+    parentCoachingTip: "",
+  },
+];
+const groupedItems = flattenWorksheetItems(groupedProblems);
+assert.equal(groupedItems.length, 1);
+assert.equal(groupedItems[0].parts.length, 2);
+assert.equal(groupedItems[0].parts[0].numberLabel, "(1)");
+assert.equal(groupedItems[0].parts[1].numberLabel, "(2)");
+assert.match(groupedItems[0].parts[0].stem, /何時何分ですか/);
+assert.match(groupedItems[0].parts[1].stem, /あと何分で4時ですか/);
+const groupedHtml = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月28日",
+  problems: groupedProblems,
+});
+assert.equal((groupedHtml.match(/<img /g) ?? []).length, 1);
+assert.match(groupedHtml, /何時何分ですか/);
+assert.match(groupedHtml, /あと何分で4時ですか/);
+assert.match(groupedHtml, /item-part/);
+pass("同じ大問の共通図は1つだけ出し、小問を並べる");
+
 const outDir = join(root, "scripts/output");
 mkdirSync(outDir, { recursive: true });
 writeFileSync(join(outDir, "print-preview.html"), html, "utf8");
+const figurePreview = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月28日",
+  problems: [
+    {
+      id: "calc-unit",
+      label: "1",
+      topicTag: "たし算",
+      visualType: "text_only",
+      problemType: "calc_block",
+      originalImageSrc: FIGURE_PNG,
+      originalPath: "scans/unit.jpg",
+      bbox: [80, 60, 180, 940],
+      questionText: "2 + 6 =",
+      isCorrect: false,
+      correctAnswer: "8",
+      parentCoachingTip: "",
+    },
+    {
+      id: "fig-unit",
+      label: "3",
+      topicTag: "てこ",
+      visualType: "has_figure",
+      problemType: "science_social_diagram",
+      figureBase64: FIGURE_PNG,
+      figureCropBox: [0, 200, 700, 800],
+      contextText: "下の図のような手順で、てこが水平につり合うのはどれですか。",
+      questionText: "(3) 実験の結果を表にまとめると、正しいものをすべて選びなさい。",
+      optionsText: "① 支点からのきょりが2倍 ② おもりを2倍 ③ 力点と作用点を入れかえる",
+      isCorrect: false,
+      correctAnswer: "1,3",
+      parentCoachingTip: "",
+    },
+    {
+      id: "pass-unit",
+      label: "2",
+      topicTag: "読解",
+      visualType: "passage_based",
+      problemType: "reading_passage",
+      contextText: "雨が三日続いたので、川の水かさが増えた。",
+      questionText: "水かさが増えた理由は？",
+      isCorrect: false,
+      correctAnswer: "雨が続いたから",
+      parentCoachingTip: "",
+    },
+  ],
+});
+assert.match(figurePreview, /2 \+ 6/);
+assert.match(figurePreview, /<img src="data:image/);
+assert.match(figurePreview, /てこが水平につり合う/);
+assert.match(figurePreview, /実験の結果を表にまとめると/);
+assert.match(figurePreview, /支点からのきょり/);
+assert.match(figurePreview, /passage-block/);
+assert.match(figurePreview, /水かさが増えた理由/);
+assert.match(figurePreview, /--crop-w:/);
+assert.match(figurePreview, /--crop-h:/);
+assert.match(figurePreview, /page-break-inside: avoid/);
+writeFileSync(join(outDir, "print-figure-preview.html"), figurePreview, "utf8");
+pass("計算・図あり・長文のユニットを同じ紙面に並べる");
+
+const compoundHtml = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月28日",
+  problems: [
+    {
+      id: "lever-3",
+      label: "3",
+      topicTag: "てこ",
+      visualType: "has_figure",
+      problemType: "science_social_diagram",
+      parentContext: "下の図のような手順で、てこが水平につり合うのはどれですか。",
+      questionText: "(3) 実験の結果を表にまとめると、正しいものをすべて選びなさい。",
+      optionsText: "① 支点からのきょりが2倍 ② おもりを2倍 ③ 力点と作用点を入れかえる",
+      parentFigureSrc: FIGURE_PNG,
+      subFigureSrc: FIGURE_PNG,
+      parentFigureBox: [40, 50, 380, 950],
+      subFigureBox: [420, 80, 680, 900],
+      isCorrect: false,
+      correctAnswer: "1,3",
+      parentCoachingTip: "",
+    },
+  ],
+});
+assert.equal((compoundHtml.match(/<img /g) ?? []).length, 2);
+const ctxAt = compoundHtml.indexOf("下の図のような手順");
+const qAt = compoundHtml.indexOf("実験の結果を表にまとめると");
+const optAt = compoundHtml.indexOf("支点からのきょり");
+const firstImg = compoundHtml.indexOf("<img ");
+const secondImg = compoundHtml.indexOf("<img ", firstImg + 1);
+assert.ok(ctxAt >= 0 && firstImg > ctxAt && qAt > firstImg && secondImg > qAt && optAt > secondImg);
+assert.match(compoundHtml, /answer-box/);
+pass("複合問題は親図・設問・表・選択肢の順に並べる");
+
+const tableOnlyHtml = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月28日",
+  problems: [
+    {
+      id: "lever-6",
+      label: "6",
+      topicTag: "てこ",
+      visualType: "text_only",
+      problemType: "standard",
+      parentContext: "下の図のような手順で、てこが水平につり合うのはどれですか。",
+      questionText: "(6) 実験の結果を表にまとめると、正しいものをすべて選びなさい。",
+      optionsText: "① 支点からのきょりが2倍 ② おもりを2倍 ③ 力点と作用点を入れかえる",
+      parentFigureSrc: FIGURE_PNG,
+      subFigureSrc: FIGURE_PNG,
+      parentFigureBox: [40, 50, 380, 950],
+      subFigureBox: [500, 80, 720, 900],
+      isCorrect: false,
+      correctAnswer: "1,3",
+      parentCoachingTip: "",
+    },
+  ],
+});
+assert.equal((tableOnlyHtml.match(/<img /g) ?? []).length, 2);
+const tableQ = tableOnlyHtml.indexOf("実験の結果を表にまとめると");
+const tableFirstImg = tableOnlyHtml.indexOf("<img ");
+const tableSecondImg = tableOnlyHtml.indexOf("<img ", tableFirstImg + 1);
+assert.ok(tableQ > tableFirstImg && tableSecondImg > tableQ);
+pass("表にまとめるとの小問は visual_type が text_only でも表を出す");
+
+const ocrTableHtml = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月28日",
+  problems: [
+    {
+      id: "lever-ocr",
+      label: "6",
+      topicTag: "てこ",
+      visualType: "has_figure",
+      parentContext: "下の図のような手順で、てこが水平につり合うのはどれですか。",
+      questionText:
+        "下の図のような手順で、てこが水平につり合うのはどれですか。(6) 実験の結果を和にまとめると、正しいものをすべて選びなさい。",
+      optionsText: "① 支点からのきょりが2倍",
+      parentFigureSrc: FIGURE_PNG,
+      subFigureSrc: FIGURE_PNG,
+      parentFigureBox: [40, 50, 380, 950],
+      subFigureBox: [500, 80, 720, 900],
+      isCorrect: false,
+      correctAnswer: "1,3",
+      parentCoachingTip: "",
+    },
+  ],
+});
+assert.equal((ocrTableHtml.match(/てこが水平につり合う/g) ?? []).length, 1);
+assert.match(ocrTableHtml, /表にまとめると/);
+assert.doesNotMatch(ocrTableHtml, /和にまとめると/);
+assert.equal((ocrTableHtml.match(/<img /g) ?? []).length, 2);
+pass("OCRの和にまとめるとを直し、リード文の二重表示を除く");
+
+const q2TableHtml = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月28日",
+  problems: [
+    {
+      id: "lever-2",
+      label: "2",
+      topicTag: "てこ",
+      visualType: "has_figure",
+      parentContext: "下の図のような手順で、てこが水平につり合うのはどれですか。",
+      questionText: "(2) 実験の結果を表にまとめると、正しいものをすべて選びなさい。",
+      optionsText: "① 支点からのきょりが2倍 ② おもりを2倍",
+      parentFigureSrc: FIGURE_PNG,
+      subFigureBase64: FIGURE_PNG,
+      parentFigureBox: [40, 50, 380, 950],
+      subFigureBox: [500, 80, 720, 900],
+      isCorrect: false,
+      correctAnswer: "1,2",
+      parentCoachingTip: "",
+    },
+  ],
+});
+assert.equal((q2TableHtml.match(/<img /g) ?? []).length, 2);
+const q2At = q2TableHtml.indexOf("実験の結果を表にまとめると");
+const q2First = q2TableHtml.indexOf("<img ");
+const q2Second = q2TableHtml.indexOf("<img ", q2First + 1);
+assert.ok(q2At > q2First && q2Second > q2At);
+pass("小問(2)のデータ表を本文直下に必ず描画する");
+
+const { enrichPrintFigureBoxes, resolveSubFigureBox, resolveParentFigureBox, needsDataTableVisual, benefitsFromParentFigure } =
+  await import(pathToFileURL(join(root, "src/features/print/lib/figure-boxes.mjs")).href);
+assert.equal(
+  needsDataTableVisual({
+    questionText: "(3) 実験の結果を表にまとめると下のようになりました。",
+  }),
+  true,
+);
+assert.equal(
+  needsDataTableVisual({
+    questionText: "(3) 実験の結果から正しいものをすべて選びなさい。",
+  }),
+  true,
+);
+assert.equal(benefitsFromParentFigure({ questionText: "(3) 実験の結果を表にまとめると下のようになりました。" }), true);
+const inferredSub = resolveSubFigureBox({
+  questionText: "(3) 実験の結果を表にまとめると下のようになりました。",
+  parentFigureBox: [40, 50, 380, 950],
+});
+assert.ok(inferredSub);
+assert.ok(inferredSub[0] >= 600);
+assert.ok(inferredSub[0] <= 780);
+assert.ok(inferredSub[2] - inferredSub[0] >= 90);
+const enriched = enrichPrintFigureBoxes([
+  {
+    id: "a",
+    originalPath: "scans/x.jpg",
+    questionText: "(1) 変えるものを選びなさい。",
+    parentFigureBox: [40, 50, 380, 950],
+    visualType: "has_figure",
+  },
+  {
+    id: "b",
+    originalPath: "scans/x.jpg",
+    questionText: "(3) 実験の結果を表にまとめると下のようになりました。",
+    visualType: "text_only",
+  },
+]);
+assert.deepEqual(enriched[1].parentFigureBox, [40, 50, 380, 950]);
+assert.ok(enriched[1].subFigureBox);
+assert.equal(enriched[1].visualType, "has_figure");
+const enrichedHelpful = enrichPrintFigureBoxes([
+  {
+    id: "p",
+    originalPath: "scans/y.jpg",
+    questionText: "(1) 変えるものを選びなさい。",
+    parentFigureBox: [40, 50, 380, 950],
+    subFigureBox: [760, 40, 960, 960],
+    visualType: "has_figure",
+  },
+  {
+    id: "q",
+    originalPath: "scans/y.jpg",
+    questionText: "(3) 実験の結果から正しいものをすべて選びなさい。",
+    visualType: "text_only",
+  },
+]);
+assert.deepEqual(enrichedHelpful[1].parentFigureBox, [40, 50, 380, 950]);
+assert.deepEqual(enrichedHelpful[1].subFigureBox, [760, 40, 960, 960]);
+assert.equal(enrichedHelpful[1].visualType, "has_figure");
+const fromCropOnly = enrichPrintFigureBoxes([
+  {
+    id: "crop-only",
+    originalPath: "scans/z.jpg",
+    questionText: "(3) 実験の結果を表にまとめると下のようになりました。",
+    crop_box: [40, 50, 380, 950],
+    visualType: "text_only",
+  },
+]);
+assert.deepEqual(fromCropOnly[0].parentFigureBox, [40, 50, 380, 950]);
+assert.ok(fromCropOnly[0].subFigureBox);
+assert.ok(fromCropOnly[0].subFigureBox[2] - fromCropOnly[0].subFigureBox[0] >= 90);
+assert.deepEqual(
+  resolveParentFigureBox({
+    questionText: "(3) 実験の結果を表にまとめると",
+    crop_box: [40, 50, 380, 950],
+  }),
+  [40, 50, 380, 950],
+);
+const bothHtml = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月28日",
+  problems: [
+    {
+      id: "both-3",
+      label: "3",
+      topicTag: "てこ",
+      visualType: "has_figure",
+      parentContext: "下の図のような手順で、てこが水平につり合うのはどれですか。",
+      questionText: "(3) 実験の結果を表にまとめると下のようになりました。正しいものをすべて選びなさい。",
+      optionsText: "① 支点からのきょり ② おもりの重さ",
+      parentFigureSrc: FIGURE_PNG,
+      subFigureSrc: FIGURE_PNG,
+      parentFigureBox: [40, 50, 380, 950],
+      subFigureBox: inferredSub,
+      isCorrect: false,
+      correctAnswer: "1",
+      parentCoachingTip: "",
+    },
+  ],
+});
+assert.equal((bothHtml.match(/<img /g) ?? []).length, 2);
+assert.ok(bothHtml.indexOf("表にまとめると") > bothHtml.indexOf("<img "));
+pass("図と表があり必須またはあった方がよい小問は親図と表を両方出す");
 pass("プレビュー HTML を書き出した");
 
 assert.equal(chooseAnswerStyle({ problemType: "calc_block" }), "calc");
@@ -571,8 +1076,14 @@ assert.match(previewSheets, /width: 60/);
 assert.match(previewSheets, /fontSize: 16/);
 assert.match(previewSheets, /sanitizeStem/);
 assert.match(previewSheets, /FigureAnswerFrame/);
+assert.match(previewSheets, /occupancy/);
+assert.match(previewSheets, /resizeMode="contain"/);
+assert.doesNotMatch(previewSheets, /maxHeight/);
+assert.match(previewSheets, /item.parts/);
+assert.match(previewSheets, /part.subFigureSrc/);
 assert.doesNotMatch(previewSheets, /fontSize: 22/);
 assert.doesNotMatch(previewSheets, /CroppedImage/);
+assert.doesNotMatch(previewSheets, /toScanPrintSheets/);
 assert.doesNotMatch(previewSheets, /borderStyle: "dashed"/);
 const printScreen = readFileSync(join(root, "app/(app)/print/index.tsx"), "utf8");
 assert.doesNotMatch(printScreen, /保護者カンペシート/);
@@ -597,9 +1108,13 @@ assert.match(printHook, /excluded\.has/);
 assert.match(printHook, /candidates/);
 assert.match(printHook, /resolvePrintImageUrls/);
 const scanImageSrc = readFileSync(join(root, "src/lib/files/scan-image.ts"), "utf8");
-assert.match(scanImageSrc, /FIGURE_CACHE_VERSION = 2/);
+assert.match(scanImageSrc, /FIGURE_CACHE_VERSION = 14/);
 assert.match(scanImageSrc, /isRawScanSourceUri/);
+assert.match(scanImageSrc, /expandFigureGeminiBox/);
+assert.match(scanImageSrc, /planExpandedFigureCrop/);
 assert.match(scanImageSrc, /cropFigureToBase64/);
+assert.match(scanImageSrc, /expanded-preserve/);
+assert.match(scanImageSrc, /preserveExtent:\s*true/);
 assert.match(scanImageSrc, /ensureLocalImageFile/);
 assert.match(scanImageSrc, /base64:\s*true/);
 assert.match(scanImageSrc, /data:image\/jpeg;base64/);
@@ -617,7 +1132,13 @@ assert.match(printService, /isRawScanSourceUri/);
 assert.match(printService, /figureBase64/);
 assert.match(printService, /data:image/);
 assert.match(printService, /cropFigureToBase64/);
+assert.match(printService, /enrichPrintFigureBoxes/);
+assert.match(printService, /resolveParentFigureBox/);
+assert.match(printService, /resolveSubFigureBox/);
+assert.match(printService, /needsDataTableVisual/);
 assert.match(printService, /resolvePrintImageUrls\(input.problems\)/);
+assert.match(printService, /fallback to text: no crop_box/);
+assert.doesNotMatch(printService, /coerceGeminiBox\(problem.bbox\)/);
 const gradeServiceSrc = readFileSync(join(root, "src/features/grading/service.ts"), "utf8");
 assert.match(gradeServiceSrc, /answerBBox/);
 assert.doesNotMatch(gradeServiceSrc, /if \(problem.figureImageSrc\) return problem/);

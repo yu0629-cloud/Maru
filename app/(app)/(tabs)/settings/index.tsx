@@ -1,12 +1,12 @@
 import { Alert, Pressable, ScrollView, Text, View } from "react-native";
 import { push, replace } from "@/src/lib/nav/href";
 import { useAuth } from "@/src/hooks/useAuth";
+import { useQuota } from "@/src/hooks/useQuota";
 import { signOut } from "@/src/features/auth/service";
 import { deleteOwnAccount } from "@/src/features/auth/deleteAccount";
-import { LEGAL_DOCS } from "@/src/constants/legal";
-import { useQuota } from "@/src/hooks/useQuota";
 import { DebugResetScanQuotaButton } from "@/src/components/DebugResetScanQuotaButton";
 import { GradeMarkPreview } from "@/src/components/GradeMark";
+import { LegalLinkList } from "@/src/components/LegalFooter";
 import { PlanPreviewSwitcher } from "@/src/components/PlanPreviewSwitcher";
 import { tPlan, useAppLocale, useT } from "@/src/i18n";
 import { defaultMarkStyle, type MarkStyle } from "@/src/features/prefs/mark-style";
@@ -141,16 +141,7 @@ export default function SettingsScreen() {
         {markStyle === "global" ? <GradeMarkPreview style="global" size={32} /> : null}
       </View>
 
-      <Text className="mt-8 font-bold text-ink">{t("settings.legalTitle")}</Text>
-      {Object.entries(LEGAL_DOCS).map(([id, doc]) => (
-        <Pressable
-          key={id}
-          className="mt-3 rounded-2xl bg-white px-4 py-4"
-          onPress={() => push(`/(app)/settings/legal/${id}`)}
-        >
-          <Text className="text-ink">{doc.title}</Text>
-        </Pressable>
-      ))}
+      <LegalLinkList />
 
       <Pressable className="mt-8 rounded-2xl bg-white px-4 py-4" onPress={onLogout}>
         <Text className="text-center font-bold text-ink">{t("settings.logout")}</Text>

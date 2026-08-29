@@ -100,6 +100,8 @@ export function gradeResultToView(result: GradeResult, scanId: string): GradedPr
     visual_type: problem.visual_type,
     crop_box: problem.crop_box,
     passage_text: problem.passage_text,
+    context_text: problem.context_text,
+    options_text: problem.options_text,
     bbox: problem.bbox,
   }));
 }

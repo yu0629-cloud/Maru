@@ -36,6 +36,81 @@ export function coerceGeminiBox(value) {
   return null;
 }
 
+/** 面積のない [0,0,0,0] などは切り抜き対象にしない
+ * @returns {[number, number, number, number] | null}
+ */
+export function usableGeminiBox(value) {
+  const nums = coerceGeminiBox(value);
+  if (!nums) return null;
+  const ymin = Math.min(nums[0], nums[2]);
+  const xmin = Math.min(nums[1], nums[3]);
+  const ymax = Math.max(nums[0], nums[2]);
+  const xmax = Math.max(nums[1], nums[3]);
+  if (!(ymax > ymin) || !(xmax > xmin)) return null;
+  return [ymin, xmin, ymax, xmax];
+}
+
+/**
+ * 親図は左右ラベル・下の手順注釈が切れないよう余白を取る。
+ * 表は見出し〜最終行が入るよう上下左右を少し広げる。
+ */
+export const FIGURE_PAD = 0.05;
+export const FIGURE_SIDE_PAD = 0.08;
+export const FIGURE_TOP_PAD = 0.05;
+export const FIGURE_BOTTOM_PAD = 0.1;
+
+/** 図・表の切り抜きを広げる。親図は注釈・左右端優先、下の表は上方向を抑える
+ * @returns {[number, number, number, number] | null}
+ */
+export function expandFigureGeminiBox(box, pad = FIGURE_PAD) {
+  const nums = usableGeminiBox(box);
+  if (!nums) return null;
+  const ymin = nums[0];
+  const xmin = nums[1];
+  const ymax = nums[2];
+  const xmax = nums[3];
+  const h = Math.max(1, ymax - ymin);
+  const w = Math.max(1, xmax - xmin);
+  // ページ下半分の箱は表・グラフ想定（選択肢帯を大きく巻き込みすぎない）
+  const lowerTable = ymin >= 560 || (ymin >= 480 && h <= 320);
+  const sidePad = lowerTable ? 0.05 : FIGURE_SIDE_PAD;
+  const topPad = lowerTable ? 0.035 : FIGURE_TOP_PAD;
+  const bottomPad = lowerTable ? 0.06 : FIGURE_BOTTOM_PAD;
+  const dyTop = Math.max(h * topPad, lowerTable ? 12 : 14);
+  const dyBottom = Math.max(h * bottomPad, lowerTable ? 20 : 40);
+  const dx = Math.max(w * sidePad, lowerTable ? 22 : 28);
+  const next = [
+    clamp(ymin - dyTop, 0, 1000),
+    clamp(xmin - dx, 0, 1000),
+    clamp(ymax + dyBottom, 0, 1000),
+    clamp(xmax + dx, 0, 1000),
+  ];
+  if (!(next[2] > next[0]) || !(next[3] > next[1])) return nums;
+  return next;
+}
+
+/**
+ * 親図が子図（表）に実際に食い込むときだけ ymax を止める。
+ * クリップで親図が潰れる場合は切らない（図が消えるのを防ぐ）。
+ * @returns {[number, number, number, number] | null}
+ */
+export function prepareParentFigureBox(parent, sub, gap = 8) {
+  const p = usableGeminiBox(parent);
+  if (!p) return null;
+  const s = usableGeminiBox(sub);
+  if (!s) return p;
+  if (s[0] >= p[2] + 36) return p;
+  const origH = Math.max(1, p[2] - p[0]);
+  const expandBottom = Math.max(origH * FIGURE_BOTTOM_PAD, 40);
+  const limit = s[0] - gap - expandBottom;
+  if (!(p[2] > limit)) return p;
+  const minH = Math.max(140, origH * 0.6);
+  if (limit < p[0] + minH) return p;
+  const ymax = Math.max(p[0] + minH, limit);
+  if (!(ymax > p[0])) return p;
+  return [p[0], p[1], ymax, p[3]];
+}
+
 export function isNormalizedBox(value) {
   if (!value || typeof value !== "object") return false;
   return ["x", "y", "width", "height"].every(
@@ -160,10 +235,14 @@ export function padNormalizedBox(box, pad = 0.04) {
 /**
  * 図の crop から解答欄 bbox を端に沿って除外する。
  * 中央に重なって残面積が足りないときは元の crop を返す（白マスク側で隠す）。
+ * 大問図など広い矩形（preserveExtent）では切り落としせず、必ず元の crop を返す。
  */
-export function shrinkCropExcludingAnswer(crop, answer) {
+export function shrinkCropExcludingAnswer(crop, answer, options = {}) {
   if (!isNormalizedBox(crop)) return crop;
   if (!isNormalizedBox(answer)) return crop;
+  if (options.preserveExtent === true) return crop;
+  // 大問図・横並び実験図など広い領域は端を削るとラベルが落ちるのでシュリンクしない
+  if (crop.width >= 0.55 && crop.height >= 0.22) return crop;
   const hit = intersectNormalized(crop, answer);
   if (!hit) return crop;
   const spanX = hit.width / crop.width;
@@ -215,17 +294,18 @@ export function geminiBoxToPixelCrop(box, imageWidth, imageHeight) {
   const imgW = Math.max(0, Math.round(Number(imageWidth) || 0));
   const imgH = Math.max(0, Math.round(Number(imageHeight) || 0));
   if (imgW < 8 || imgH < 8) return null;
-  const ymin = Math.min(nums[0], nums[2]) / 1000;
-  const xmin = Math.min(nums[1], nums[3]) / 1000;
-  const ymax = Math.max(nums[0], nums[2]) / 1000;
-  const xmax = Math.max(nums[1], nums[3]) / 1000;
+  // Gemini crop_box は 0〜1000。実ファイル解像度へ写す（表示サイズは使わない）
+  const ymin = Math.min(nums[0], nums[2]);
+  const xmin = Math.min(nums[1], nums[3]);
+  const ymax = Math.max(nums[0], nums[2]);
+  const xmax = Math.max(nums[1], nums[3]);
   if (!(ymax > ymin) || !(xmax > xmin)) return null;
-  let originX = Math.floor(xmin * imgW);
-  let originY = Math.floor(ymin * imgH);
+  let originX = Math.round((xmin / 1000) * imgW);
+  let originY = Math.round((ymin / 1000) * imgH);
   originX = clamp(originX, 0, imgW - 1);
   originY = clamp(originY, 0, imgH - 1);
-  const width = Math.max(8, Math.min(Math.ceil((xmax - xmin) * imgW), imgW - originX));
-  const height = Math.max(8, Math.min(Math.ceil((ymax - ymin) * imgH), imgH - originY));
+  const width = Math.max(8, Math.min(Math.round(((xmax - xmin) / 1000) * imgW), imgW - originX));
+  const height = Math.max(8, Math.min(Math.round(((ymax - ymin) / 1000) * imgH), imgH - originY));
   if (width < 8 || height < 8) return null;
   return { originX, originY, width, height };
 }
@@ -240,14 +320,32 @@ function asGeminiBox(value) {
   }
 }
 
-/** 図 crop から解答欄を除いた切り抜き範囲と、残った重なりの白マスク（crop 内 0〜1） */
-export function figureAnswerMasks(cropGemini, bboxGemini) {
+/** 図 crop から解答欄を除いた切り抜き範囲と、残った重なりの白マスク（crop 内 0〜1）
+ * options.preserveExtent=true のとき crop は削らず、解答は白マスクのみで隠す（大問図向け）
+ */
+export function figureAnswerMasks(cropGemini, bboxGemini, options = {}) {
   const crop = asGeminiBox(cropGemini);
   if (!crop) return { crop: null, masks: [] };
   const answer = asGeminiBox(bboxGemini);
-  const used = answer ? shrinkCropExcludingAnswer(crop, answer) : crop;
+  const preserveExtent = options.preserveExtent === true;
+  const used =
+    answer && !preserveExtent ? shrinkCropExcludingAnswer(crop, answer, options) : crop;
   const rel = answer ? relativeBoxInParent(used, answer) : null;
   const masks = rel ? [padNormalizedBox(rel, 0.06)] : [];
   return { crop: used, masks };
+}
+
+/**
+ * 印刷・キャッシュ用: Gemini 生座標を expand し、大問図は枠を維持したまま切り抜き矩形を決める。
+ * 戻り値の cropGemini は実際の JPEG crop と白マスクの共通基準。
+ */
+export function planExpandedFigureCrop(cropBox, answerBBox, options = {}) {
+  const raw = usableGeminiBox(cropBox);
+  if (!raw) return { cropGemini: null, masks: [] };
+  const expanded = expandFigureGeminiBox(raw) ?? raw;
+  const preserveExtent = options.preserveExtent !== false;
+  const planned = figureAnswerMasks(expanded, answerBBox ?? null, { preserveExtent });
+  const cropGemini = planned.crop ? normalizedBoxToGemini(planned.crop) : expanded;
+  return { cropGemini, masks: planned.masks ?? [] };
 }
 

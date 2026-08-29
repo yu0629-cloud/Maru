@@ -25,8 +25,14 @@ export type GradedProblemView = {
   visual_type?: VisualType;
   crop_box?: GeminiBBox | null;
   passage_text?: string;
+  context_text?: string;
+  parent_context?: string;
+  options_text?: string;
+  parent_figure_box?: GeminiBBox | null;
+  sub_figure_box?: GeminiBBox | null;
   figureImageSrc?: string;
   figureBase64?: string;
+  subFigureBase64?: string;
   bbox?: GeminiBBox;
   dirty?: boolean;
 };

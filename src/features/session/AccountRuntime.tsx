@@ -6,6 +6,10 @@ import { hydrateChildren } from "@/src/features/children/service";
 import { hydratePlanPreview } from "@/src/features/billing/preview";
 import { hydrateBilling } from "@/src/lib/revenuecat/hydrate";
 import { hydrateRecentScans } from "@/src/features/storage/hydrate-scans";
+import {
+  hydrateGuestScans,
+  startGuestScanPersistence,
+} from "@/src/features/storage/guest-scans";
 import { useTopicMasteryStore } from "@/src/stores/topicMasteryStore";
 import { purgeLocalScanCache, toFileUri } from "@/src/lib/files/scan-image";
 import { useChildStore } from "@/src/stores/childStore";
@@ -14,7 +18,7 @@ import { useScanQueueStore } from "@/src/stores/scanQueueStore";
 import { useScanStore } from "@/src/stores/scanStore";
 
 export function AccountRuntime({ children }: { children: ReactNode }) {
-  const { signedIn, userId } = useAuth();
+  const { signedIn, userId, isAnonymous } = useAuth();
   const currentChildId = useChildStore((state) => state.currentChildId);
 
   useEffect(() => {
@@ -37,11 +41,27 @@ export function AccountRuntime({ children }: { children: ReactNode }) {
   }, [signedIn, userId]);
 
   useEffect(() => {
+    if (!signedIn || !userId || !isAnonymous) return;
+    const stop = startGuestScanPersistence();
+    void hydrateGuestScans().catch((error) => {
+      console.warn("[AccountRuntime] hydrateGuestScans", error);
+    });
+    return stop;
+  }, [signedIn, userId, isAnonymous]);
+
+  useEffect(() => {
     if (!signedIn || !userId) return;
     let cancelled = false;
     void (async () => {
       try {
+        if (isAnonymous) {
+          await hydrateGuestScans();
+        }
         await hydrateRecentScans(currentChildId);
+        if (isAnonymous) {
+          const { persistGuestScans } = await import("@/src/features/storage/guest-scans");
+          await persistGuestScans();
+        }
         await useTopicMasteryStore.getState().hydrate(currentChildId);
       } catch (error) {
         console.warn("[AccountRuntime] hydrateRecentScans", error);
@@ -69,7 +89,7 @@ export function AccountRuntime({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [signedIn, userId, currentChildId]);
+  }, [signedIn, userId, currentChildId, isAnonymous]);
 
   return <>{children}</>;
 }

@@ -30,6 +30,10 @@ export type ProblemInsert = {
   visual_type: VisualType;
   crop_box: GradeProblem["bbox"] | null;
   passage_text: string;
+  context_text: string;
+  options_text: string;
+  parent_figure_box: GradeProblem["bbox"] | null;
+  sub_figure_box: GradeProblem["bbox"] | null;
 };
 
 export function toProblemInserts(
@@ -60,7 +64,11 @@ export function toProblemInserts(
     problem_type: problem.problem_type,
     visual_type: problem.visual_type,
     crop_box: problem.crop_box,
-    passage_text: problem.passage_text ?? "",
+    passage_text: problem.passage_text ?? problem.context_text ?? "",
+    context_text: problem.context_text ?? problem.passage_text ?? "",
+    options_text: problem.options_text ?? "",
+    parent_figure_box: problem.parent_figure_box ?? null,
+    sub_figure_box: problem.sub_figure_box ?? null,
   }));
 }
 

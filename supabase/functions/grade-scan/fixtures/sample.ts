@@ -97,6 +97,9 @@ export const SAMPLE_GRADE_RESULT: GradeResult = {
       problem_type: "math_geometry_graph",
       visual_type: "has_figure",
       crop_box: [830, 40, 980, 700],
+      context_text: "次の立体について答えなさい。",
+      options_text: "",
+      passage_text: "",
     },
   ],
 };

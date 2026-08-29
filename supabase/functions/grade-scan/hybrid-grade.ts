@@ -46,6 +46,10 @@ export type ExtractedProblem = {
   visual_type?: "text_only" | "has_figure" | "passage_based";
   crop_box?: [number, number, number, number] | null;
   passage_text?: string;
+  context_text?: string;
+  options_text?: string;
+  parent_figure_box?: [number, number, number, number] | null;
+  sub_figure_box?: [number, number, number, number] | null;
   word_bank?: string;
   gemini_is_correct?: boolean;
 };

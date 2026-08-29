@@ -24,6 +24,24 @@ export type GradeProblem = {
   visual_type?: VisualType;
   crop_box?: GeminiBBox | null;
   passage_text?: string;
+  context_text?: string;
+  options_text?: string;
+  parent_figure_box?: GeminiBBox | null;
+  sub_figure_box?: GeminiBBox | null;
+};
+
+/** 復習プリント用の自己完結ユニット。Gemini の problem_index は problem_number 相当。figureBase64 は切り抜き後に付与。 */
+export type ProblemUnit = {
+  problem_number: string | number;
+  parent_context?: string;
+  parent_figure_box?: GeminiBBox | null;
+  question_text: string;
+  sub_figure_box?: GeminiBBox | null;
+  options_text?: string;
+  is_correct: boolean;
+  visual_type: VisualType;
+  figureBase64?: string;
+  subFigureBase64?: string;
 };
 
 export type GradeResult = {

@@ -38,6 +38,7 @@ Deno.test("responseSchema は question_text を含む抽出キーを必須にす
     "bbox",
     "visual_type",
     "crop_box",
+    "question_unit",
   ]);
   assertEquals(Object.keys(item.properties), [
     "problem_index",
@@ -51,6 +52,7 @@ Deno.test("responseSchema は question_text を含む抽出キーを必須にす
     "bbox",
     "visual_type",
     "crop_box",
+    "question_unit",
     "passage_text",
   ]);
   assertEquals(item.properties.question_text.description.includes("16"), true);
@@ -167,6 +169,61 @@ Deno.test("正解は needs_inpaint を false、無解答は blank に正規化�
   assertEquals(result.problems[1].needs_inpaint, false);
 });
 
+Deno.test("表にまとめるとの小問は空の sub_figure_box を同一プリントの表座標で補う", () => {
+  const result = validateGradeResult({
+    overall_score: { earned: 0, max: 2 },
+    problems: [
+      {
+        problem_index: "3",
+        question_text: "(3) おもりの位置を変えなさい。",
+        bbox: [10, 10, 80, 400],
+        is_correct: false,
+        student_answer: "1",
+        correct_answer: "2",
+        visual_type: "has_figure",
+        parent_figure_box: [40, 50, 380, 950],
+        sub_figure_box: [500, 80, 720, 900],
+      },
+      {
+        problem_index: "6",
+        question_text: "(6) 実験の結果を表にまとめると、正しいものをすべて選びなさい。",
+        bbox: [400, 10, 480, 400],
+        is_correct: false,
+        student_answer: "2",
+        correct_answer: "1,3",
+        visual_type: "text_only",
+        parent_figure_box: [40, 50, 380, 950],
+        sub_figure_box: [0, 0, 0, 0],
+      },
+    ],
+  });
+  assertEquals(result.problems[1].visual_type, "has_figure");
+  assertEquals(result.problems[1].sub_figure_box, [500, 80, 720, 900]);
+});
+
+Deno.test("和にまとめるとは表にまとめるとに直し、表座標を残す", () => {
+  const result = validateGradeResult({
+    overall_score: { earned: 0, max: 1 },
+    problems: [
+      {
+        problem_index: "6",
+        question_text: "(6) 実験の結果を和にまとめると、正しいものをすべて選びなさい。",
+        bbox: [400, 10, 480, 400],
+        is_correct: false,
+        student_answer: "2",
+        correct_answer: "1,3",
+        visual_type: "text_only",
+        parent_figure_box: [40, 50, 380, 950],
+        sub_figure_box: [500, 80, 720, 900],
+      },
+    ],
+  });
+  assertEquals(result.problems[0].question_text.includes("表にまとめると"), true);
+  assertEquals(result.problems[0].question_text.includes("和にまとめると"), false);
+  assertEquals(result.problems[0].visual_type, "has_figure");
+  assertEquals(result.problems[0].sub_figure_box, [500, 80, 720, 900]);
+});
+
 Deno.test("不正な得点や空の problems は拒否する", () => {
   assertThrows(
     () => validateGradeResult({ overall_score: { earned: 11, max: 10 }, problems: SAMPLE_GRADE_RESULT.problems }),
@@ -185,9 +242,41 @@ Deno.test("1次プロンプトは ground_truth を先に導かせ、手書きと
     examTarget: "中学受験",
   });
   assert(prompt.includes("はると"));
-  assert(prompt.includes("problem_index, question_text, ground_truth, student_answer, is_correct, correct_answer, type, topic, bbox, visual_type, crop_box"));
+  assert(prompt.includes("problem_index, question_text, ground_truth, student_answer, is_correct, correct_answer, type, topic, bbox, visual_type, crop_box, question_unit"));
   assert(prompt.includes("has_figure"));
   assert(prompt.includes("crop_box"));
+  assert(prompt.includes("question_unit"));
+  assert(prompt.includes("context_text"));
+  assert(prompt.includes("options_text"));
+  assert(prompt.includes("番号を書きましょう"));
+  assert(prompt.includes("記号を書きましょう"));
+  assert(prompt.includes("純粋な図"));
+  assert(prompt.includes("自己完結"));
+  assert(prompt.includes("2〜3%"));
+  assert(prompt.includes("完全境界認識"));
+  assert(prompt.includes("すき間"));
+  assert(prompt.includes("Bounding Box"));
+  assert(prompt.includes("下線部"));
+  assert(prompt.includes("会話文"));
+  assert(prompt.includes("一番右"));
+  assert(prompt.includes("自己検証"));
+  assert(prompt.includes("(1)"));
+  assert(prompt.includes("表にまとめると"));
+  assert(prompt.includes("和にまとめると"));
+  assert(prompt.includes("あった方が解きやすい"));
+  assert(prompt.includes("片方だけにしない"));
+  assert(prompt.includes("ふた"));
+  assert(prompt.includes("引き出し"));
+  assert(prompt.includes("左のうで"));
+  assert(prompt.includes("(2)"));
+  assert(prompt.includes("(6)"));
+  assert(prompt.includes("罫線"));
+  assert(prompt.includes("グラフ"));
+  assert(prompt.includes("空にするな"));
+  assert(prompt.includes("漏れなく"));
+  assert(prompt.includes("parent_context"));
+  assert(prompt.includes("parent_figure_box"));
+  assert(prompt.includes("sub_figure_box"));
   assert(prompt.includes("1問=1件"));
   assert(prompt.includes("math"));
   assert(prompt.includes("text"));
@@ -261,6 +350,7 @@ Deno.test("problems 行へ一括変換し、inpaint 対象だけ残す", () => {
   assertEquals(rows[0].visual_type, "text_only");
   assertEquals(rows[3].visual_type, "has_figure");
   assertEquals(rows[3].crop_box, [830, 40, 980, 700]);
+  assertEquals(rows[3].context_text, "次の立体について答えなさい。");
   assertEquals(inferSubject("立体切断"), "math");
   assertEquals(inferSubject("漢字書き取り", "kanji"), "japanese");
 

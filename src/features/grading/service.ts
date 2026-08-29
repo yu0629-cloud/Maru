@@ -75,16 +75,36 @@ async function attachFigureCrops(scan: ScanRecord): Promise<ScanRecord> {
     scan.problems.map(async (problem) => {
       const visual = inferVisualType(problem);
       if (visual !== "has_figure") return problem;
-      const cropBox = coerceGeminiBox(problem.crop_box) ?? coerceGeminiBox(problem.bbox) ?? [0, 0, 1000, 1000];
-      const figureBase64 = await cropFigureToBase64({
-        sourceUri: scan.localUri as string,
-        cropBox,
-        scanId: scan.id,
-        problemId: problem.id,
-        answerBBox: problem.bbox ?? null,
-        visualType: visual,
-      });
-      return figureBase64 ? { ...problem, figureImageSrc: figureBase64, figureBase64 } : problem;
+      const parentBox = coerceGeminiBox(problem.parent_figure_box);
+      const subBox = coerceGeminiBox(problem.sub_figure_box);
+      const cropBox =
+        coerceGeminiBox(problem.crop_box) ??
+        parentBox ??
+        subBox ??
+        coerceGeminiBox(problem.bbox) ??
+        [0, 0, 1000, 1000];
+      const cropOne = async (box: unknown, suffix: string) => {
+        if (!box) return "";
+        return (
+          (await cropFigureToBase64({
+            sourceUri: scan.localUri as string,
+            cropBox: box,
+            scanId: scan.id,
+            problemId: `${problem.id}-${suffix}`,
+            answerBBox: problem.bbox ?? null,
+            visualType: visual,
+          })) ?? ""
+        );
+      };
+      const figureBase64 = await cropOne(parentBox || cropBox, "p");
+      const subFigureBase64 = await cropOne(subBox, "s");
+      if (!figureBase64 && !subFigureBase64) return problem;
+      return {
+        ...problem,
+        figureImageSrc: figureBase64 || subFigureBase64,
+        figureBase64: figureBase64 || subFigureBase64,
+        subFigureBase64: subFigureBase64 || undefined,
+      };
     }),
   );
   const next = { ...scan, problems };

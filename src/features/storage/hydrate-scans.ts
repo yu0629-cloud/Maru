@@ -37,6 +37,10 @@ type HydratedProblemRow = Pick<
   | "visual_type"
   | "crop_box"
   | "passage_text"
+  | "context_text"
+  | "options_text"
+  | "parent_figure_box"
+  | "sub_figure_box"
   | "gemini_bbox"
   | "cropped_storage_path"
   | "blanked_storage_path"
@@ -47,7 +51,7 @@ function asRows<T>(data: unknown): T[] {
 }
 
 const PROBLEM_SELECT =
-  "id, scan_id, problem_index, problem_label, question_text, is_correct, mistake_type, parent_coaching_tip, student_answer, correct_answer, unit, topic, topic_tags, needs_inpaint, problem_type, visual_type, crop_box, passage_text, gemini_bbox, cropped_storage_path, blanked_storage_path";
+  "id, scan_id, problem_index, problem_label, question_text, is_correct, mistake_type, parent_coaching_tip, student_answer, correct_answer, unit, topic, topic_tags, needs_inpaint, problem_type, visual_type, crop_box, passage_text, context_text, options_text, parent_figure_box, sub_figure_box, gemini_bbox, cropped_storage_path, blanked_storage_path";
 
 function mapScanStatus(status: ScanStatus): ScanRecord["status"] {
   if (status === "failed") return "failed";
@@ -78,7 +82,11 @@ function mapProblem(row: HydratedProblemRow, imageSrc = ""): GradedProblemView {
       topicTag: row.topic ?? row.unit,
     }),
     crop_box: row.crop_box ?? undefined,
-    passage_text: row.passage_text ?? "",
+    passage_text: row.passage_text ?? row.context_text ?? "",
+    context_text: row.context_text ?? row.passage_text ?? "",
+    options_text: row.options_text ?? "",
+    parent_figure_box: row.parent_figure_box ?? undefined,
+    sub_figure_box: row.sub_figure_box ?? undefined,
     bbox: row.gemini_bbox ?? undefined,
   };
 }
@@ -135,10 +143,10 @@ async function fetchProblemsForScans(scanIds: string[]) {
   if (!withTopic.error) return asRows<HydratedProblemRow>(withTopic.data);
   const missingColumn =
     withTopic.error.code === "42703" ||
-    /problems\.(topic|visual_type|crop_box|passage_text) does not exist/i.test(withTopic.error.message ?? "");
+    /problems\.(topic|visual_type|crop_box|passage_text|context_text|options_text|parent_figure_box|sub_figure_box) does not exist/i.test(withTopic.error.message ?? "");
   if (!missingColumn) throw withTopic.error;
   const fallbackSelect = PROBLEM_SELECT.replace(", topic,", ",")
-    .replace(", visual_type, crop_box, passage_text,", ",");
+    .replace(", visual_type, crop_box, passage_text, context_text, options_text, parent_figure_box, sub_figure_box,", ",");
   const { data, error } = await supabase
     .from("problems")
     .select(fallbackSelect)

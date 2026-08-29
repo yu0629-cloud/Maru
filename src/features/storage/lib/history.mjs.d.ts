@@ -14,5 +14,6 @@ export function selectHistoryScans<T extends Record<string, unknown>>(
     childId?: string | null;
     tier?: string | null;
     now?: string;
+    isAnonymous?: boolean;
   },
 ): T[];

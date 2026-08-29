@@ -1,13 +1,13 @@
-import { RETENTION } from "@/src/features/storage/retention";
+﻿import { RETENTION } from "@/src/features/storage/retention";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import { Image } from "react-native";
 import { maruLog } from "@/src/lib/debug/maruLog";
 import {
   coerceGeminiBox,
-  figureAnswerMasks,
+  expandFigureGeminiBox,
   geminiBoxToPixelCrop,
-  normalizedBoxToGemini,
+  planExpandedFigureCrop,
 } from "@/src/features/print/lib/bbox.mjs";
 
 export const SCAN_MAX_LONG_EDGE = 1280;
@@ -269,7 +269,7 @@ export async function purgeLocalScanCache(input?: { keepUris?: Array<string | un
   return { deleted };
 }
 
-export const FIGURE_CACHE_VERSION = 2;
+export const FIGURE_CACHE_VERSION = 14;
 const FULL_PAGE_CROP: [number, number, number, number] = [0, 0, 1000, 1000];
 
 function figuresDir() {
@@ -418,10 +418,12 @@ async function manipulateCrop(
 }
 
 function geminiForCrop(cropBox: unknown, answerBBox?: unknown) {
-  const gemini = coerceGeminiBox(cropBox) ?? FULL_PAGE_CROP;
-  const planned = figureAnswerMasks(gemini, answerBBox ?? null);
-  if (planned.crop) return normalizedBoxToGemini(planned.crop);
-  return gemini;
+  const planned = planExpandedFigureCrop(cropBox ?? FULL_PAGE_CROP, answerBBox ?? null, {
+    preserveExtent: true,
+  });
+  if (planned.cropGemini) return planned.cropGemini;
+  const raw = coerceGeminiBox(cropBox) ?? FULL_PAGE_CROP;
+  return expandFigureGeminiBox(raw) ?? raw;
 }
 
 async function cacheFigureFile(resultUri: string, scanId?: string, problemId?: string) {
@@ -479,8 +481,14 @@ export async function cropFigureToBase64(input: {
     return null;
   }
 
+  const expandedOnly =
+    (geminiCrop ? expandFigureGeminiBox(geminiCrop) : null) ?? geminiCrop ?? FULL_PAGE_CROP;
   const attempts: Array<{ label: string; box: [number, number, number, number] }> = [
-    { label: "planned", box: geminiForCrop(geminiCrop ?? FULL_PAGE_CROP, input.answerBBox) as [number, number, number, number] },
+    {
+      label: "expanded-preserve",
+      box: geminiForCrop(geminiCrop ?? FULL_PAGE_CROP, input.answerBBox) as [number, number, number, number],
+    },
+    { label: "expanded-only", box: expandedOnly as [number, number, number, number] },
   ];
   if (geminiCrop) attempts.push({ label: "raw-crop_box", box: geminiCrop as [number, number, number, number] });
   attempts.push({ label: "full-page", box: FULL_PAGE_CROP });

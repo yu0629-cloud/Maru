@@ -344,6 +344,22 @@ assert.match(schemaBlock, /"is_correct"/);
 assert.match(schemaBlock, /visual_type/);
 assert.match(schemaBlock, /has_figure/);
 assert.match(schemaBlock, /crop_box/);
+assert.match(schemaBlock, /question_unit/);
+assert.match(schemaBlock, /context_text/);
+assert.match(schemaBlock, /parent_figure_box/);
+assert.match(schemaBlock, /STOP immediately ABOVE/);
+assert.match(schemaBlock, /complete visual rectangle/i);
+assert.match(schemaBlock, /すき間/);
+assert.match(schemaBlock, /表にまとめると/);
+assert.match(schemaBlock, /グラフ/);
+assert.match(schemaBlock, /\(2\)/);
+assert.match(schemaBlock, /ruled table/);
+assert.match(schemaBlock, /和にまとめると/);
+assert.match(schemaBlock, /ふた/);
+assert.match(schemaBlock, /左のうで/);
+assert.match(schemaBlock, /NEVER \[0,0,0,0\]/);
+assert.match(schemaBlock, /sub_figure_box/);
+assert.match(schemaBlock, /parent_context/);
 assert.doesNotMatch(schemaBlock, /difficulty_level/);
 assert.doesNotMatch(schemaBlock, /mistake_type/);
 assert.doesNotMatch(schemaBlock, /needs_inpaint/);
@@ -366,15 +382,50 @@ assert.doesNotMatch(geminiSrc, /x-goog-api-key/);
 pass("Gemini 呼び出しが REST 直叩き・既定は 3.5 flash-lite");
 
 const promptSrc = readFileSync(join(root, "supabase/functions/grade-scan/prompt.ts"), "utf8");
-assert.match(promptSrc, /problem_index, question_text, ground_truth, student_answer, is_correct, correct_answer, type, topic, bbox, visual_type, crop_box/);
+assert.match(promptSrc, /problem_index, question_text, ground_truth, student_answer, is_correct, correct_answer, type, topic, bbox, visual_type, crop_box, question_unit/);
 assert.match(promptSrc, /has_figure/);
 assert.match(promptSrc, /crop_box/);
+assert.match(promptSrc, /question_unit/);
+assert.match(promptSrc, /context_text/);
+assert.match(promptSrc, /options_text/);
 assert.match(promptSrc, /ground_truth/);
 assert.match(promptSrc, /Step 1/);
 assert.match(promptSrc, /目盛り/);
 assert.match(promptSrc, /語群/);
 assert.match(promptSrc, /すべて選べ/);
 assert.match(promptSrc, /1問=1件/);
+assert.match(promptSrc, /番号を書きましょう/);
+assert.match(promptSrc, /記号を書きましょう/);
+assert.match(promptSrc, /漏れなく/);
+assert.match(promptSrc, /純粋な図/);
+assert.match(promptSrc, /自己完結/);
+assert.match(promptSrc, /参照/);
+assert.match(promptSrc, /2〜3%/);
+assert.match(promptSrc, /完全境界認識/);
+assert.match(promptSrc, /すき間/);
+assert.match(promptSrc, /Bounding Box/);
+assert.match(promptSrc, /下線部/);
+assert.match(promptSrc, /会話文/);
+assert.match(promptSrc, /資料/);
+assert.match(promptSrc, /一番右端/);
+assert.match(promptSrc, /ymax/);
+assert.match(promptSrc, /\(1\)/);
+assert.match(promptSrc, /表にまとめると/);
+assert.match(promptSrc, /\(2\)\(3\)\(6\)/);
+assert.match(promptSrc, /あった方が解きやすい/);
+assert.match(promptSrc, /片方だけにしない/);
+assert.match(promptSrc, /罫線/);
+assert.match(promptSrc, /グラフ/);
+assert.match(promptSrc, /和にまとめると/);
+assert.match(promptSrc, /ふた/);
+assert.match(promptSrc, /引き出し/);
+assert.match(promptSrc, /左のうで/);
+assert.match(promptSrc, /\(6\)/);
+assert.match(promptSrc, /空にするな/);
+assert.match(promptSrc, /自己検証/);
+assert.match(promptSrc, /parent_context/);
+assert.match(promptSrc, /parent_figure_box/);
+assert.match(promptSrc, /sub_figure_box/);
 assert.match(promptSrc, /2 \+ 6 =/);
 assert.match(promptSrc, /解答欄/);
 assert.match(promptSrc, /すぐ右/);
@@ -457,7 +508,7 @@ assert.match(promptSrc, /アルファベット/);
 assert.match(promptSrc, /迷ったら other/);
 assert.match(promptSrc, /topic は必須/);
 assert.match(promptSrc, /くり上がりのある足し算/);
-assert.match(schemaBlock, /required: \[[\s\S]*"ground_truth"[\s\S]*"is_correct"[\s\S]*"crop_box"/);
+assert.match(schemaBlock, /required: \[[\s\S]*"ground_truth"[\s\S]*"is_correct"[\s\S]*"crop_box"[\s\S]*"question_unit"/);
 assert.match(
   readFileSync(join(root, "supabase/functions/grade-scan/persist.ts"), "utf8"),
   /resolveScanSubject/,
@@ -495,6 +546,20 @@ pass("HTTP 層は storagePath のみ受け取り Base64 を拒否する");
 const persistSrc = readFileSync(join(root, "supabase/functions/grade-scan/persist.ts"), "utf8");
 assert.match(persistSrc, /question_text: problem\.question_text/);
 assert.match(persistSrc, /topic: problem\.topic_tag/);
+assert.match(persistSrc, /context_text:/);
+assert.match(persistSrc, /parent_figure_box:/);
+assert.match(persistSrc, /sub_figure_box:/);
+const validateSrc = readFileSync(join(root, "supabase/functions/grade-scan/validate.ts"), "utf8");
+assert.match(validateSrc, /fillMissingSubFigureBoxes/);
+assert.match(validateSrc, /あった方がよい/);
+assert.match(validateSrc, /normalizeOcrText/);
+assert.match(validateSrc, /inferTableBoxBelow/);
+assert.match(validateSrc, /mentionsDataTable/);
+const ocrTextSrc = readFileSync(join(root, "supabase/functions/grade-scan/ocr-text.mjs"), "utf8");
+assert.match(ocrTextSrc, /下のようになりました/);
+assert.match(ocrTextSrc, /実験の結果/);
+assert.match(ocrTextSrc, /あった方が解きやすい/);
+assert.match(persistSrc, /options_text:/);
 assert.match(
   readFileSync(join(root, "supabase/migrations/20240827000021_problem_topic.sql"), "utf8"),
   /ADD COLUMN IF NOT EXISTS topic/,
@@ -518,7 +583,11 @@ assert.match(compressSrc, /SCAN_JPEG_QUALITY = 0\.6/);
 assert.match(compressSrc, /SCAN_MAX_LONG_EDGE = 1280/);
 assert.match(compressSrc, /pickScanPictureSize/);
 assert.match(compressSrc, /compress skip/);
-assert.doesNotMatch(compressSrc, /readAsStringAsync/);
+const compressFn = compressSrc.slice(
+  compressSrc.indexOf("export async function compressScanForGrade"),
+  compressSrc.indexOf("export async function describeImage"),
+);
+assert.doesNotMatch(compressFn, /readAsStringAsync/);
 pass("圧縮は長辺1280px・JPEG 0.6 で確定し fallback read しない");
 
 console.log("\nAll grade-scan contract checks passed.");
