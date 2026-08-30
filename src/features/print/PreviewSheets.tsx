@@ -6,9 +6,11 @@ import {
   PRINT_ROWS_PER_PAGE,
   stripRepeatedLead,
   stripLeadingQuestionNumber,
+  stripMarkdownTables,
   type PrintDocumentInput,
   type WorksheetItem,
 } from "@/src/features/print/html";
+import { needsDataTableVisual } from "@/src/features/print/lib/figure-boxes.mjs";
 import { t } from "@/src/i18n";
 import { normalizeOcrText } from "@/src/features/print/lib/ocr-text.mjs";
 
@@ -17,6 +19,35 @@ function sanitizeStem(text: string) {
     .replace(/\$/g, "")
     .replace(/＄/g, "")
     .trim();
+}
+
+function partWantsDataTable(
+  part: { stem?: string; options?: string },
+  context = "",
+) {
+  return needsDataTableVisual({
+    questionText: part.stem,
+    optionsText: part.options,
+    parentContext: context,
+  });
+}
+
+function isDistinctSubFigure(
+  parentSrc?: string | null,
+  subSrc?: string | null,
+  parentOcc?: { widthPct: number; heightMm: number } | null,
+  subOcc?: { widthPct: number; heightMm: number } | null,
+) {
+  const parent = String(parentSrc ?? "").trim();
+  const sub = String(subSrc ?? "").trim();
+  if (!sub) return false;
+  if (sub !== parent) return true;
+  if (!subOcc || !Number.isFinite(subOcc.heightMm)) return false;
+  if (!parentOcc || !Number.isFinite(parentOcc.heightMm)) return true;
+  return (
+    Math.abs(Number(subOcc.heightMm) - Number(parentOcc.heightMm)) > 0.5 ||
+    Math.abs(Number(subOcc.widthPct) - Number(parentOcc.widthPct)) > 0.5
+  );
 }
 
 function NumberLabel({
@@ -198,20 +229,33 @@ function WorksheetCell({ item }: { item: WorksheetItem }) {
   } as const;
 
   if (item.kind === "figure") {
+    const parentSrc = item.parentFigureSrc || item.figureSrc;
+    const parentOcc = item.parentOccupancy || item.occupancy;
+    const shownSubs = new Set<string>();
     return (
       <View style={cardStyle}>
         {context ? (
           <Text style={{ fontSize: 14, lineHeight: 21, color: "#222", marginBottom: 6 }}>{context}</Text>
         ) : null}
-        <FigureMedia
-          id={`${item.id}-parent`}
-          src={item.parentFigureSrc || item.figureSrc}
-          occupancy={item.parentOccupancy || item.occupancy}
-          masks={item.masks}
-        />
+        <FigureMedia id={`${item.id}-parent`} src={parentSrc} occupancy={parentOcc} masks={item.masks} />
         {parts.map((part, index) => {
           const partStem = stripLeadingQuestionNumber(stripRepeatedLead(part.stem, rawContext));
-          const partOptions = sanitizeStem(part.options ?? "");
+          const wantsTable = partWantsDataTable(part, rawContext);
+          const subSrc = part.subFigureSrc || (wantsTable ? item.subFigureSrc : "") || "";
+          const subOcc = part.subOccupancy ?? (wantsTable ? item.subOccupancy : null);
+          const subKey =
+            subOcc && Number.isFinite(subOcc.heightMm)
+              ? `occ:${Math.round(Number(subOcc.widthPct) * 10)}:${Math.round(Number(subOcc.heightMm) * 10)}`
+              : subSrc
+                ? `src:${String(subSrc).length}:${String(subSrc).slice(40, 88)}`
+                : "";
+          const showSub =
+            wantsTable &&
+            Boolean(subKey) &&
+            !shownSubs.has(subKey) &&
+            isDistinctSubFigure(parentSrc, subSrc, parentOcc, subOcc);
+          if (showSub && subKey) shownSubs.add(subKey);
+          const partOptions = sanitizeStem(stripMarkdownTables(part.options ?? ""));
           return (
             <View
               key={`${item.id}-part-${part.numberLabel || part.number}-${index}`}
@@ -226,12 +270,14 @@ function WorksheetCell({ item }: { item: WorksheetItem }) {
                 <NumberLabel label={part.numberLabel ?? item.numberLabel} numberStyle={part.numberStyle ?? item.numberStyle} />
                 {partStem}
               </Text>
-              <FigureMedia
-                id={`${item.id}-sub-${part.numberLabel || part.number}-${index}`}
-                src={part.subFigureSrc || item.subFigureSrc}
-                occupancy={part.subOccupancy ?? item.subOccupancy}
-                masks={part.subMasks ?? item.subMasks}
-              />
+              {showSub ? (
+                <FigureMedia
+                  id={`${item.id}-sub-${part.numberLabel || part.number}-${index}`}
+                  src={subSrc}
+                  occupancy={subOcc}
+                  masks={part.subMasks ?? item.subMasks}
+                />
+              ) : null}
               {partOptions ? (
                 <Text style={{ fontSize: 14, lineHeight: 21, color: "#222", marginBottom: 8 }}>{partOptions}</Text>
               ) : null}

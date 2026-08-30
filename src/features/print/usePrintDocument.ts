@@ -83,6 +83,7 @@ export function usePrintDocument(): PrintDocumentInput & { candidates: PrintProb
 
   useEffect(() => {
     let cancelled = false;
+    setResolvedProblems(null);
     void resolvePrintImageUrls(visibleProblems)
       .then((next) => {
         if (!cancelled) setResolvedProblems(next);

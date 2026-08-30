@@ -17,6 +17,8 @@ import {
   selectProblemsForScope,
   stripLatexDollars,
   DAILY_PRINT_MAX,
+  dedupePrintProblems,
+  contentDedupeKey,
 } from "./lib/from-reviews.mjs";
 
 export function toPrintProblems(reviews: ReviewQueueItem[]): PrintProblem[] {
@@ -58,4 +60,6 @@ export {
   selectProblemsForScope,
   stripLatexDollars,
   DAILY_PRINT_MAX,
+  dedupePrintProblems,
+  contentDedupeKey,
 };

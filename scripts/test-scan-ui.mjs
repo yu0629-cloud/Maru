@@ -83,6 +83,7 @@ pass("Config Plugin とネイティブスキャナー呼び出しを登録して
 const storeSrc = readFileSync(join(root, "src/stores/scanQueueStore.ts"), "utf8");
 assert.match(storeSrc, /EMPTY_JOBS/);
 assert.match(storeSrc, /useCurrentBatchJobs/);
+assert.match(storeSrc, /startFreshBatch/);
 pass("バッチ購読は新しい配列を selector から返さない");
 
 const queueSrc = readFileSync(join(root, "src/features/grading/batch-queue.ts"), "utf8");

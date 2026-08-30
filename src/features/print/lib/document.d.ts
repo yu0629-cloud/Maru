@@ -156,12 +156,19 @@ export function expandFigureGeminiBox(
   box?: unknown,
   pad?: number,
 ): [number, number, number, number] | null;
+export function clipFigureBottomBeforeBelow(
+  expanded?: unknown,
+  original?: unknown,
+  belowBox?: unknown,
+  gap?: number,
+): [number, number, number, number] | null;
 export function prepareParentFigureBox(
   parent?: unknown,
   sub?: unknown,
   gap?: number,
 ): [number, number, number, number] | null;
 export function stripRepeatedLead(stem?: unknown, context?: unknown): string;
+export function stripMarkdownTables(text?: unknown): string;
 export function resolveCropBox(input?: object | null): {
   x: number;
   y: number;

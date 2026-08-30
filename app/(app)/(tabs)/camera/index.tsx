@@ -7,7 +7,7 @@ import { QuotaBadge } from "@/src/components/QuotaBadge";
 import { ScanCaptureStage } from "@/src/components/ScanCaptureStage";
 import { ChildScoped } from "@/src/components/ChildScoped";
 import { enqueueScanJob } from "@/src/features/grading/batch-queue";
-import { useCurrentBatchJobs, type ScanQueueJob } from "@/src/stores/scanQueueStore";
+import { useCurrentBatchJobs, useScanQueueStore, type ScanQueueJob } from "@/src/stores/scanQueueStore";
 import { maruLog } from "@/src/lib/debug/maruLog";
 import { ensureAtLeastOneChild } from "@/src/features/children/service";
 import { useCurrentChild } from "@/src/hooks/useCurrentChild";
@@ -105,6 +105,11 @@ function CameraBody() {
       const child = await resolveChild();
       if (!child) return;
 
+      // 前回バッチが完了済みならジョブ履歴を捨てて新規セッションにする（重複蓄積防止）
+      if (allGraded || batchJobs.every((job) => job.status === "completed" || job.status === "failed")) {
+        if (batchJobs.length > 0) useScanQueueStore.getState().startFreshBatch();
+      }
+
       if (!liveCamera) {
         await enqueueUri(`mock-capture://${Date.now()}`, undefined, child);
         return;
@@ -174,6 +179,9 @@ function CameraBody() {
       if (!ensureQuota(picked.length)) return;
       const child = await resolveChild();
       if (!child) return;
+      if (allGraded || batchJobs.every((job) => job.status === "completed" || job.status === "failed")) {
+        if (batchJobs.length > 0) useScanQueueStore.getState().startFreshBatch();
+      }
       for (const asset of picked) {
         if (!(await enqueueUri(asset.uri, { width: asset.width, height: asset.height }, child))) break;
       }

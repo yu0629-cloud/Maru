@@ -269,7 +269,7 @@ export async function purgeLocalScanCache(input?: { keepUris?: Array<string | un
   return { deleted };
 }
 
-export const FIGURE_CACHE_VERSION = 14;
+export const FIGURE_CACHE_VERSION = 24;
 const FULL_PAGE_CROP: [number, number, number, number] = [0, 0, 1000, 1000];
 
 function figuresDir() {
@@ -417,13 +417,19 @@ async function manipulateCrop(
   });
 }
 
-function geminiForCrop(cropBox: unknown, answerBBox?: unknown) {
+function geminiForCrop(
+  cropBox: unknown,
+  answerBBox?: unknown,
+  options?: { asTable?: boolean; clipBottomBeforeStem?: boolean },
+) {
   const planned = planExpandedFigureCrop(cropBox ?? FULL_PAGE_CROP, answerBBox ?? null, {
     preserveExtent: true,
+    asTable: options?.asTable === true,
+    clipBottomBeforeStem: options?.asTable ? false : options?.clipBottomBeforeStem,
   });
   if (planned.cropGemini) return planned.cropGemini;
   const raw = coerceGeminiBox(cropBox) ?? FULL_PAGE_CROP;
-  return expandFigureGeminiBox(raw) ?? raw;
+  return expandFigureGeminiBox(raw, undefined, { asTable: options?.asTable === true }) ?? raw;
 }
 
 async function cacheFigureFile(resultUri: string, scanId?: string, problemId?: string) {
@@ -453,17 +459,20 @@ export async function cropFigureToBase64(input: {
   problemId?: string;
   answerBBox?: unknown;
   visualType?: string;
+  asTable?: boolean;
 }): Promise<string | null> {
   const visual = String(input.visualType ?? "");
+  const asTable = input.asTable === true || String(input.problemId ?? "").endsWith("-s");
   const geminiCrop = coerceGeminiBox(input.cropBox);
   figureLog("crop start", {
     problemId: input.problemId,
     visualType: visual || "(unset)",
     visualIsHasFigure: visual === "has_figure",
+    asTable,
     sourceUri: String(input.sourceUri ?? "").slice(0, 120),
     cropBox: geminiCrop,
     cropBoxRawType: Array.isArray(input.cropBox) ? "array" : typeof input.cropBox,
-    answerBBox: coerceGeminiBox(input.answerBBox),
+    answerBBox: asTable ? null : coerceGeminiBox(input.answerBBox),
   });
 
   const local = await ensureLocalImageFile(input.sourceUri);
@@ -481,17 +490,33 @@ export async function cropFigureToBase64(input: {
     return null;
   }
 
+  const cropOpts = { asTable, clipBottomBeforeStem: !asTable };
+  const answerForClip = asTable ? null : input.answerBBox;
   const expandedOnly =
-    (geminiCrop ? expandFigureGeminiBox(geminiCrop) : null) ?? geminiCrop ?? FULL_PAGE_CROP;
+    (geminiCrop ? expandFigureGeminiBox(geminiCrop, undefined, { asTable }) : null) ??
+    geminiCrop ??
+    FULL_PAGE_CROP;
   const attempts: Array<{ label: string; box: [number, number, number, number] }> = [
     {
-      label: "expanded-preserve",
-      box: geminiForCrop(geminiCrop ?? FULL_PAGE_CROP, input.answerBBox) as [number, number, number, number],
+      label: asTable ? "expanded-table" : "expanded-preserve",
+      box: geminiForCrop(geminiCrop ?? FULL_PAGE_CROP, answerForClip, cropOpts) as [
+        number,
+        number,
+        number,
+        number,
+      ],
     },
-    { label: "expanded-only", box: expandedOnly as [number, number, number, number] },
   ];
-  if (geminiCrop) attempts.push({ label: "raw-crop_box", box: geminiCrop as [number, number, number, number] });
-  attempts.push({ label: "full-page", box: FULL_PAGE_CROP });
+  if (asTable) {
+    attempts.push({ label: "expanded-only", box: expandedOnly as [number, number, number, number] });
+    if (geminiCrop) attempts.push({ label: "raw-crop_box", box: geminiCrop as [number, number, number, number] });
+  } else if (geminiCrop) {
+    // 親図は設問本文を含まないクリップだけ使う（full-page / 未クリップは二重表示の原因）
+    attempts.push({
+      label: "raw-crop_box",
+      box: (expandFigureGeminiBox(geminiCrop) ?? geminiCrop) as [number, number, number, number],
+    });
+  }
 
   let lastError: unknown;
   for (const attempt of attempts) {

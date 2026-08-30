@@ -56,6 +56,54 @@ function sameBox(a, b) {
   return a[0] === b[0] && a[1] === b[1] && a[2] === b[2] && a[3] === b[3];
 }
 
+function shareKeyOf(item) {
+  const path = String(item?.originalPath || item?.original_path || item?.scanId || item?.scan_id || "").trim();
+  if (path) return path.replace(/[?#].*$/, "").split(/[/\\]/).filter(Boolean).pop() || path;
+  return String(item?.originalImageSrc || item?.original_image_src || "").replace(/[?#].*$/, "");
+}
+
+/**
+ * 同一スキャン内で、親図より下にある解答/小問 bbox のうち最も上端が早いもの。
+ * 親図切り抜きが (1) 本文を巻き込まないようにする。
+ * @returns {[number, number, number, number] | null}
+ */
+function contextKeyOf(item) {
+  return normalizeOcrText(
+    String(item?.parentContext || item?.parent_context || item?.contextText || item?.context_text || ""),
+  )
+    .replace(/\s+/g, "")
+    .slice(0, 80);
+}
+
+export function earliestStemBelowParent(problems, parentBox, current) {
+  const parent = usableGeminiBox(parentBox);
+  if (!parent) return usableGeminiBox(current?.bbox ?? current?.gemini_bbox ?? current?.geminiBbox);
+  const key = shareKeyOf(current);
+  const ctx = contextKeyOf(current);
+  const parentMid = parent[0] + (parent[2] - parent[0]) * 0.28;
+  let best = null;
+  let bestTop = Infinity;
+  const list = Array.isArray(problems) ? problems : [];
+  for (const row of list) {
+    const rowKey = shareKeyOf(row);
+    if (key && rowKey && rowKey !== key) {
+      const rowCtx = contextKeyOf(row);
+      if (!ctx || !rowCtx || (ctx !== rowCtx && !ctx.includes(rowCtx) && !rowCtx.includes(ctx))) continue;
+    }
+    const box = usableGeminiBox(row?.bbox ?? row?.gemini_bbox ?? row?.geminiBbox);
+    if (!box) continue;
+    const top = Math.min(box[0], box[2]);
+    if (top < parentMid) continue;
+    if (top >= parent[2] + 260) continue;
+    if (top < bestTop) {
+      bestTop = top;
+      best = box;
+    }
+  }
+  if (best) return best;
+  return usableGeminiBox(current?.bbox ?? current?.gemini_bbox ?? current?.geminiBbox);
+}
+
 /** crop_box がページ上部の共通図らしいか（表だけ補完したときに親を落とさない） */
 export function looksLikeParentFigureBox(box, sub = null) {
   const p = usableGeminiBox(box);
@@ -69,28 +117,63 @@ export function looksLikeParentFigureBox(box, sub = null) {
   return true;
 }
 
+function hasPrintedChoices(item = {}) {
+  const hay = [
+    item.optionsText,
+    item.options_text,
+    item.questionText,
+    item.question_text,
+  ]
+    .map((part) => String(part ?? ""))
+    .join(" ");
+  return /[①-⑳❶-❿]/.test(hay);
+}
+
 /**
- * ページ下部の表領域を推定する。見出し行〜最終行が入る高さにする。
- * @returns {[number, number, number, number]}
+ * 表切り抜きから、設問の選択肢帯を外す。
+ * options_text は印字用で、crop 座標の計算には使っていなかった。
  */
-export function inferTableBoxBelow(parent) {
+export function trimTableBoxExcludingChoices(box, item = {}) {
+  const b = usableGeminiBox(box);
+  if (!b) return null;
+  const hasChoices = hasPrintedChoices(item);
+  const h = b[2] - b[0];
+  const topTrim = hasChoices ? 48 : 8;
+  // 下端は「箱が①〜③帯まで伸びている」ときだけ切る。表の最終行は残す
+  const likelyIncludesOptions = hasChoices && (b[2] >= 925 || h >= 260);
+  const bottomTrim = likelyIncludesOptions ? 40 : 0;
+  const ymin = clamp(b[0] + topTrim, 0, 1000);
+  const ymax = clamp(b[2] - bottomTrim, 0, 1000);
+  if (!(ymax > ymin + 70)) return b;
+  return [ymin, b[1], ymax, b[3]];
+}
+
+export function inferTableBoxBelow(parent, item = {}) {
   const p = usableGeminiBox(parent);
-  // 親図直下の小問は避けつつ、表全体（複数行）が入るよう上端を上げすぎない
-  const floor = p ? clamp(Math.max(p[2] + 140, 640), 600, 780) : 680;
-  const ymax = 978;
-  if (ymax - floor < 90) {
-    return [clamp(ymax - 180, 0, 1000), 40, ymax, 960];
-  }
-  return [floor, 40, ymax, 960];
+  // 見出し〜最終行が入る高さ。選択肢帯まで伸ばさない
+  const floor = p ? clamp(Math.max(p[2] + 180, 680), 640, 760) : 700;
+  const ymax = clamp(floor + 230, floor + 140, 930);
+  return trimTableBoxExcludingChoices([floor, 48, ymax, 952], item) ?? [floor, 48, ymax, 952];
 }
 
 /**
  * 小問固有の表・グラフ座標。明示箱 → 親より下の crop → 推定。
+ * 明示箱が浅い（行が見切れる）ときは下端を伸ばす。
  * @returns {[number, number, number, number] | null}
  */
 export function resolveSubFigureBox(item) {
   const explicit = usableGeminiBox(item?.subFigureBox ?? item?.sub_figure_box);
-  if (explicit) return explicit;
+  if (explicit) {
+    return trimTableBoxExcludingChoices(
+      [
+        clamp(explicit[0] - 4, 0, 1000),
+        clamp(explicit[1] - 8, 0, 1000),
+        clamp(explicit[2] + 8, 0, 1000),
+        clamp(explicit[3] + 8, 0, 1000),
+      ],
+      item,
+    );
+  }
   if (!needsDataTableVisual(item)) return null;
 
   const parent =
@@ -103,13 +186,28 @@ export function resolveSubFigureBox(item) {
     usableGeminiBox(item?.cropBoxGemini);
 
   if (crop && parent && !sameBox(crop, parent) && crop[0] >= parent[2] - 40) {
-    return crop;
+    return trimTableBoxExcludingChoices(
+      [
+        clamp(crop[0] - 4, 0, 1000),
+        clamp(crop[1] - 8, 0, 1000),
+        clamp(crop[2] + 8, 0, 1000),
+        clamp(crop[3] + 8, 0, 1000),
+      ],
+      item,
+    );
   }
-  // crop が表領域そのもの（ページ下）ならそれを使う
   if (crop && crop[0] >= 560 && (!parent || crop[0] >= parent[2] - 20)) {
-    return crop;
+    return trimTableBoxExcludingChoices(
+      [
+        clamp(crop[0] - 4, 0, 1000),
+        clamp(crop[1] - 8, 0, 1000),
+        clamp(crop[2] + 8, 0, 1000),
+        clamp(crop[3] + 8, 0, 1000),
+      ],
+      item,
+    );
   }
-  return inferTableBoxBelow(parent);
+  return inferTableBoxBelow(parent, item);
 }
 
 /**
@@ -130,7 +228,7 @@ export function resolveParentFigureBox(item) {
 
   let sub = explicitSub;
   if (!sub && needsDataTableVisual(item)) {
-    sub = inferTableBoxBelow(candidate);
+    sub = inferTableBoxBelow(candidate, item);
   } else if (!sub) {
     sub = usableGeminiBox(item?.subFigureBox ?? item?.sub_figure_box);
   }
@@ -145,7 +243,9 @@ export function enrichPrintFigureBoxes(problems) {
   const list = Array.isArray(problems) ? problems : [];
   const byScan = new Map();
   for (const problem of list) {
-    const key = String(problem?.originalPath || problem?.original_path || problem?.scanId || problem?.scan_id || "").trim() || "__solo__";
+    const key =
+      String(problem?.originalPath || problem?.original_path || problem?.scanId || problem?.scan_id || "").trim() ||
+      `solo:${String(problem?.id || problem?.problemId || "")}`;
     if (!byScan.has(key)) byScan.set(key, []);
     byScan.get(key).push(problem);
   }
@@ -169,7 +269,9 @@ export function enrichPrintFigureBoxes(problems) {
   }
 
   return list.map((problem) => {
-    const key = String(problem?.originalPath || problem?.original_path || problem?.scanId || problem?.scan_id || "").trim() || "__solo__";
+    const key =
+      String(problem?.originalPath || problem?.original_path || problem?.scanId || problem?.scan_id || "").trim() ||
+      `solo:${String(problem?.id || problem?.problemId || "")}`;
     let parent = usableGeminiBox(problem.parentFigureBox ?? problem.parent_figure_box);
     let sub = usableGeminiBox(problem.subFigureBox ?? problem.sub_figure_box);
     const wantsTable = needsDataTableVisual(problem);

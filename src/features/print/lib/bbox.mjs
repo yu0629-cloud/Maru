@@ -51,18 +51,39 @@ export function usableGeminiBox(value) {
 }
 
 /**
- * 親図は左右ラベル・下の手順注釈が切れないよう余白を取る。
+ * 親図は左右ラベル・上部注釈が切れないよう余白を取る。
+ * 下端は記号（ア〜エ・すき間）まで含めつつ、小問「(1)」行を巻き込みすぎないよう抑える。
  * 表は見出し〜最終行が入るよう上下左右を少し広げる。
  */
 export const FIGURE_PAD = 0.05;
 export const FIGURE_SIDE_PAD = 0.08;
+/** 親図の右端。てこは Gemini がおもりで切り、空のうでの目盛を落とす */
+export const FIGURE_PARENT_RIGHT_PAD = 0.16;
+export const FIGURE_PARENT_RIGHT_MIN = 88;
+export const FIGURE_PARENT_XMAX = 992;
 export const FIGURE_TOP_PAD = 0.05;
-export const FIGURE_BOTTOM_PAD = 0.1;
+/**
+ * 親図下端。てこ手順注釈（❶❷❸）が切れないよう文字帯まで広げる。
+ * 直下の小問行は clipFigureBottomBeforeBelow で止める。
+ */
+export const FIGURE_BOTTOM_PAD = 0.08;
+/** 図下の手順注釈・記号帯を確保する正規化余白（0–1000） */
+export const FIGURE_CAPTION_ROOM = 42;
+/** 小問本文帯。answer bbox は解答欄なので、その上の設問全文を見積もって余白を取る */
+export const FIGURE_STEM_CLEARANCE = 96;
+/** ページ上部の親図が (1) 本文へ食い込まない上限 */
+export const PARENT_FIGURE_YMAX = 510;
 
-/** 図・表の切り抜きを広げる。親図は注釈・左右端優先、下の表は上方向を抑える
+export function looksLikeTopParentFigure(box) {
+  const n = usableGeminiBox(box);
+  if (!n) return false;
+  return n[0] <= 240 && n[2] - n[0] >= 90;
+}
+
+/** 図・表の切り抜きを広げる。親図は注釈・左右端優先、表は行全体が入るよう厚め
  * @returns {[number, number, number, number] | null}
  */
-export function expandFigureGeminiBox(box, pad = FIGURE_PAD) {
+export function expandFigureGeminiBox(box, pad = FIGURE_PAD, options = {}) {
   const nums = usableGeminiBox(box);
   if (!nums) return null;
   const ymin = nums[0];
@@ -71,22 +92,82 @@ export function expandFigureGeminiBox(box, pad = FIGURE_PAD) {
   const xmax = nums[3];
   const h = Math.max(1, ymax - ymin);
   const w = Math.max(1, xmax - xmin);
-  // ページ下半分の箱は表・グラフ想定（選択肢帯を大きく巻き込みすぎない）
-  const lowerTable = ymin >= 560 || (ymin >= 480 && h <= 320);
-  const sidePad = lowerTable ? 0.05 : FIGURE_SIDE_PAD;
-  const topPad = lowerTable ? 0.035 : FIGURE_TOP_PAD;
-  const bottomPad = lowerTable ? 0.06 : FIGURE_BOTTOM_PAD;
-  const dyTop = Math.max(h * topPad, lowerTable ? 12 : 14);
-  const dyBottom = Math.max(h * bottomPad, lowerTable ? 20 : 40);
-  const dx = Math.max(w * sidePad, lowerTable ? 22 : 28);
-  const next = [
-    clamp(ymin - dyTop, 0, 1000),
-    clamp(xmin - dx, 0, 1000),
-    clamp(ymax + dyBottom, 0, 1000),
-    clamp(xmax + dx, 0, 1000),
-  ];
+  // ページ下半分の箱、または明示的な表指定
+  const lowerTable =
+    options.asTable === true || ymin >= 520 || (ymin >= 450 && h <= 380);
+  const topFigure = !lowerTable && ymin <= 240;
+  const sidePad = lowerTable ? 0.04 : FIGURE_SIDE_PAD;
+  const topPad = lowerTable ? 0 : FIGURE_TOP_PAD;
+  const bottomPad = lowerTable ? 0.04 : topFigure ? 0.04 : FIGURE_BOTTOM_PAD;
+  const dyTop = lowerTable ? 0 : Math.max(h * topPad, 18);
+  const dyBottom = Math.max(
+    h * bottomPad,
+    lowerTable ? 20 : topFigure ? 18 : FIGURE_CAPTION_ROOM,
+  );
+  const dxLeft = Math.max(w * sidePad, lowerTable ? 16 : 24);
+  const dxRight = lowerTable
+    ? Math.max(w * 0.04, 16)
+    : Math.max(w * (topFigure ? FIGURE_PARENT_RIGHT_PAD : FIGURE_SIDE_PAD), topFigure ? FIGURE_PARENT_RIGHT_MIN : 28);
+  const xmaxCap = lowerTable ? 970 : topFigure ? FIGURE_PARENT_XMAX : 982;
+  let nextYmax = clamp(ymax + dyBottom, 0, 1000);
+  if (topFigure) {
+    // Gemini が (1) 本文まで箱に入れても、親図は手順注釈までで止める
+    nextYmax = Math.min(nextYmax, ymax > 520 ? 490 : PARENT_FIGURE_YMAX);
+  }
+  // 紙の外（机・余白）まで広げない。親図の右だけ目盛が残るよう厚くする
+  const nextYmin = clamp(Math.max(ymin - dyTop, lowerTable ? ymin : 8), 0, 1000);
+  const nextXmin = clamp(Math.max(xmin - dxLeft, 18), 0, 1000);
+  const nextXmax = clamp(Math.min(xmax + dxRight, xmaxCap), 0, 1000);
+  const next = [nextYmin, nextXmin, nextYmax, nextXmax];
   if (!(next[2] > next[0]) || !(next[3] > next[1])) return nums;
   return next;
+}
+
+/**
+ * 拡張後の ymax を、直下の小問／解答行の上端直前で止める。
+ * 図下の記号・手順注釈（❶❷❸）は残し、「(1) …」設問本文は含めない。
+ * answer bbox は解答欄なので、図〜解答のあいだの設問帯ごと落とす。
+ * @returns {[number, number, number, number] | null}
+ */
+export function clipFigureBottomBeforeBelow(expanded, original, belowBox, gap = 12) {
+  const exp = usableGeminiBox(expanded);
+  const orig = usableGeminiBox(original);
+  const below = usableGeminiBox(belowBox);
+  if (!exp) return null;
+  const topFigure = looksLikeTopParentFigure(orig ?? exp);
+  const geminiAteStem = Boolean(orig && (orig[2] > 520 || orig[2] - orig[0] > 430));
+  const hardCap = topFigure ? (geminiAteStem ? 490 : PARENT_FIGURE_YMAX) : null;
+
+  let stop = exp[2];
+  if (orig && below) {
+    const origH = Math.max(1, orig[2] - orig[0]);
+    const belowTop = Math.min(below[0], below[2]);
+    if (belowTop >= orig[0] + origH * 0.28 && belowTop <= orig[2] + 240) {
+      const captionEnd = Math.min(orig[2] + FIGURE_CAPTION_ROOM, PARENT_FIGURE_YMAX);
+      const gapBelowFigure = belowTop - orig[2];
+      if (gapBelowFigure > FIGURE_CAPTION_ROOM + 16) {
+        stop = Math.min(stop, captionEnd, belowTop - gap);
+      } else {
+        stop = Math.min(stop, belowTop - gap - FIGURE_STEM_CLEARANCE);
+      }
+    } else if (belowTop > orig[2] + 240 && topFigure) {
+      stop = Math.min(stop, orig[2] + FIGURE_CAPTION_ROOM, PARENT_FIGURE_YMAX);
+    }
+  } else if (topFigure && hardCap != null) {
+    stop = Math.min(stop, hardCap);
+  }
+  if (hardCap != null) stop = Math.min(stop, hardCap);
+
+  const origH = orig ? Math.max(1, orig[2] - orig[0]) : 160;
+  const minH = geminiAteStem ? Math.max(90, Math.min(origH * 0.35, 220)) : Math.max(100, origH * 0.4);
+  const minYmax = exp[0] + minH;
+  if (stop > minYmax && stop < exp[2]) {
+    return [exp[0], exp[1], clamp(stop, 0, 1000), exp[3]];
+  }
+  if (hardCap != null && exp[2] > hardCap && hardCap > exp[0] + 80) {
+    return [exp[0], exp[1], clamp(hardCap, 0, 1000), exp[3]];
+  }
+  return exp;
 }
 
 /**
@@ -101,7 +182,7 @@ export function prepareParentFigureBox(parent, sub, gap = 8) {
   if (!s) return p;
   if (s[0] >= p[2] + 36) return p;
   const origH = Math.max(1, p[2] - p[0]);
-  const expandBottom = Math.max(origH * FIGURE_BOTTOM_PAD, 40);
+  const expandBottom = Math.max(origH * FIGURE_BOTTOM_PAD, FIGURE_CAPTION_ROOM);
   const limit = s[0] - gap - expandBottom;
   if (!(p[2] > limit)) return p;
   const minH = Math.max(140, origH * 0.6);
@@ -342,7 +423,12 @@ export function figureAnswerMasks(cropGemini, bboxGemini, options = {}) {
 export function planExpandedFigureCrop(cropBox, answerBBox, options = {}) {
   const raw = usableGeminiBox(cropBox);
   if (!raw) return { cropGemini: null, masks: [] };
-  const expanded = expandFigureGeminiBox(raw) ?? raw;
+  const expandOpts = options.asTable ? { asTable: true } : {};
+  let expanded = expandFigureGeminiBox(raw, FIGURE_PAD, expandOpts) ?? raw;
+  if (options.clipBottomBeforeStem !== false && !options.asTable) {
+    expanded =
+      clipFigureBottomBeforeBelow(expanded, raw, answerBBox, options.bottomGap ?? 10) ?? expanded;
+  }
   const preserveExtent = options.preserveExtent !== false;
   const planned = figureAnswerMasks(expanded, answerBBox ?? null, { preserveExtent });
   const cropGemini = planned.crop ? normalizedBoxToGemini(planned.crop) : expanded;

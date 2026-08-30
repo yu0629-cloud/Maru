@@ -102,4 +102,6 @@ export function selectProblemsForScope(
   scope?: "daily" | "all",
   preferredIds?: Array<string | number | null | undefined>,
 ): ReturnType<typeof printProblemFromReview>[];
+export function contentDedupeKey(problem?: object | null): string;
+export function dedupePrintProblems<T extends object>(problems?: T[] | null): T[];
 export function looksLikePrintedStem(text?: string | null): boolean;

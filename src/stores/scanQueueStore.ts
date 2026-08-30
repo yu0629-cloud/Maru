@@ -22,6 +22,8 @@ type ScanQueueState = {
   jobs: ScanQueueJob[];
   currentBatchId: string | null;
   ensureBatch: () => string;
+  /** 新しい撮影セッション用にジョブ履歴を捨ててバッチを切り直す */
+  startFreshBatch: () => string;
   addJob: (job: Omit<ScanQueueJob, "status" | "createdAt"> & Partial<Pick<ScanQueueJob, "status" | "createdAt">>) => void;
   patchJob: (id: string, patch: Partial<ScanQueueJob>) => void;
   claimNextQueued: () => ScanQueueJob | null;
@@ -35,6 +37,11 @@ export const useScanQueueStore = create<ScanQueueState>((set, get) => ({
     if (existing) return existing;
     const id = randomUUID();
     set({ currentBatchId: id });
+    return id;
+  },
+  startFreshBatch: () => {
+    const id = randomUUID();
+    set({ currentBatchId: id, jobs: [] });
     return id;
   },
   addJob: (job) =>

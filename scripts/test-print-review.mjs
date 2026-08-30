@@ -23,6 +23,7 @@ const {
   packWorksheetRows,
   paginateWorksheetRows,
   paginateWorksheetItems,
+  explodeFigureItemsForPages,
   layoutKind,
   geminiBBoxToNormalizedBox,
   expandPrintCropBox,
@@ -34,6 +35,7 @@ const {
   expandFigureGeminiBox,
   prepareParentFigureBox,
   planExpandedFigureCrop,
+  clipFigureBottomBeforeBelow,
   stripRepeatedLead,
 } = await import(pathToFileURL(printLib).href);
 const { applyReviewResult, isolateLeeches, selectDailyReviews } = await import(
@@ -175,7 +177,7 @@ assert.doesNotMatch(html, /声かけ/);
 assert.match(html, /3 \+ 4/);
 pass("PDF は間違えた問題だけを集約し、テキストと解答枠で構成する");
 
-const { collectPrintProblems, isIncorrectForPrint, isBlankPrintAnswer, displayQuestionText, displayTopicTag, stripLatexDollars, hasPrintableQuestion, selectProblemsForScope, DAILY_PRINT_MAX } = await import(
+const { collectPrintProblems, isIncorrectForPrint, isBlankPrintAnswer, displayQuestionText, displayTopicTag, stripLatexDollars, hasPrintableQuestion, selectProblemsForScope, dedupePrintProblems, DAILY_PRINT_MAX } = await import(
   pathToFileURL(join(root, "src/features/print/lib/from-reviews.mjs")).href,
 );
 const scanIncorrects = collectPrintProblems({
@@ -211,6 +213,34 @@ assert.equal(scanIncorrects[0].label, "8+2");
 assert.match(scanIncorrects[0].questionText, /8\+2/);
 assert.equal(scanIncorrects[0].correctAnswer, "10");
 assert.equal(scanIncorrects.some((item) => item.id === "mock"), false);
+const twinQ4 = collectPrintProblems({
+  scope: "all",
+  extras: [
+    {
+      id: "q4-a",
+      label: "4",
+      originalPath: "scans/candle.jpg",
+      parentContext: "ろうそくの燃え方を比べました。",
+      questionText:
+        "(4) ウの上と下のすき間に線香のけむりを近づけると、どのように動きますか。次の①〜③から選び、番号を書きましょう。",
+      correctAnswer: "2",
+      studentAnswer: "2",
+      isCorrect: false,
+    },
+    {
+      id: "q4-b",
+      label: "4",
+      originalPath: "scans/candle.jpg",
+      questionText:
+        "(4) ウの上と下のすき間に線香のけむりを近づけると、どのように動きますか。次の①〜③から選び、番号を書きましょう。",
+      correctAnswer: "1",
+      studentAnswer: "2",
+      isCorrect: false,
+    },
+  ],
+});
+assert.equal(twinQ4.length, 1);
+assert.equal(twinQ4[0].id, "q4-a");
 pass("採点の不正解だけを集め、モックへ落とさない");
 
 const fromNumberOnly = collectPrintProblems({
@@ -541,14 +571,48 @@ assert.ok(paddedFigure[0] < 100);
 assert.ok(paddedFigure[1] < 50);
 assert.ok(paddedFigure[2] > 500);
 assert.ok(paddedFigure[3] > 950);
-assert.ok(paddedFigure[1] <= 20);
-assert.ok(paddedFigure[2] >= 530);
+assert.ok(paddedFigure[1] < 50);
+assert.ok(paddedFigure[2] <= 515);
+// 解答欄 bbox の上にある設問本文も図に残さない
+const clipped = clipFigureBottomBeforeBelow(
+  expandFigureGeminiBox([200, 40, 480, 960]),
+  [200, 40, 480, 960],
+  [560, 700, 620, 920],
+  12,
+);
+assert.ok(clipped);
+assert.ok(clipped[2] <= 522);
+assert.ok(clipped[2] >= 480);
+assert.ok(clipped[2] < 560);
+// 設問が近いときも (1) 本文の巻き込みを優先して切る
+const clearStem = clipFigureBottomBeforeBelow(
+  expandFigureGeminiBox([200, 40, 480, 960]),
+  [200, 40, 480, 960],
+  [500, 700, 560, 920],
+  10,
+);
+assert.ok(clearStem);
+assert.ok(clearStem[2] < 500);
+const plannedClip = planExpandedFigureCrop([200, 40, 480, 960], [560, 700, 620, 920], {
+  preserveExtent: true,
+});
+assert.ok(plannedClip.cropGemini);
+assert.ok(plannedClip.cropGemini[2] <= 522);
+const swallowedStem = planExpandedFigureCrop([80, 40, 580, 960], null, { preserveExtent: true });
+assert.ok(swallowedStem.cropGemini);
+assert.ok(swallowedStem.cropGemini[2] <= 510);
+assert.ok(swallowedStem.cropGemini[2] < 560);
+pass("親図の下端は手順注釈まで含め、設問本文は図に残さない");
 const paddedRight = expandFigureGeminiBox([100, 50, 500, 800]);
 assert.ok(paddedRight);
-assert.ok(paddedRight[3] >= 840);
+assert.ok(paddedRight[3] >= 810);
 const paddedLeft = expandFigureGeminiBox([100, 200, 500, 800]);
 assert.ok(paddedLeft);
-assert.ok(paddedLeft[1] <= 165);
+assert.ok(paddedLeft[1] <= 185);
+const tightLeverArm = expandFigureGeminiBox([80, 70, 360, 720]);
+assert.ok(tightLeverArm);
+assert.ok(tightLeverArm[3] >= 800, "おもりで切れた右うでの目盛まで伸ばす");
+assert.ok(tightLeverArm[3] <= 992);
 const parentAboveTable = prepareParentFigureBox([40, 50, 380, 950], [420, 80, 680, 900]);
 assert.deepEqual(parentAboveTable, [40, 50, 380, 950]);
 const parentFarFromTable = prepareParentFigureBox([40, 50, 380, 950], [720, 80, 960, 900]);
@@ -568,7 +632,8 @@ assert.equal(
 );
 const occupancy = cropOccupancyOf({ figureCropBox: [100, 50, 500, 950] });
 assert.ok(occupancy.widthPct >= 95);
-assert.ok(occupancy.heightMm >= 114);
+assert.ok(occupancy.heightMm >= 40);
+assert.ok(occupancy.heightMm <= 68);
 pass("crop_box の元ページ占有率を A4 本文へ写す");
 const { printProblemFromReview } = await import(pathToFileURL(join(root, "src/features/print/lib/from-reviews.mjs")).href);
 const fromJsonCrop = printProblemFromReview({
@@ -633,10 +698,13 @@ assert.match(figureHtml, /object-fit:\s*contain/);
 assert.match(figureHtml, /height:\s*auto/);
 assert.doesNotMatch(figureHtml, /object-fit:\s*cover/);
 assert.doesNotMatch(figureHtml, /max-height:\s*var\(--crop-h/);
-assert.match(figureHtml, /--crop-w:100%/);
-assert.match(figureHtml, /--crop-h:125\.6mm/);
+assert.match(figureHtml, /--crop-w:\d+(\.\d+)?%/);
+assert.match(figureHtml, /--crop-h:\d+(\.\d+)?mm/);
 assert.match(figureHtml, /parent-figure/);
-assert.doesNotMatch(figureHtml, /max-height:\s*68mm/);
+assert.match(figureHtml, /parent-figure img \{\s*max-height: 68mm/);
+assert.match(figureHtml, /sub-figure img \{\s*max-height: none/);
+assert.doesNotMatch(figureHtml, /max-height:\s*118mm/);
+assert.doesNotMatch(figureHtml, /max-height:\s*85mm/);
 assert.match(figureHtml, /answer-frame/);
 assert.doesNotMatch(figureHtml, /figure-work/);
 assert.match(figureHtml, /何時何分ですか/);
@@ -753,6 +821,24 @@ assert.equal(groupedItems[0].parts[0].numberLabel, "(1)");
 assert.equal(groupedItems[0].parts[1].numberLabel, "(2)");
 assert.match(groupedItems[0].parts[0].stem, /何時何分ですか/);
 assert.match(groupedItems[0].parts[1].stem, /あと何分で4時ですか/);
+const dupProblems = [
+  ...groupedProblems,
+  { ...groupedProblems[0], id: "clock-1-dup" },
+  { ...groupedProblems[1], id: "clock-2-extra", questionText: "(2) あと何分で4時ですか" },
+];
+const dedupedItems = flattenWorksheetItems(dupProblems);
+assert.equal(dedupedItems.length, 1);
+assert.equal(dedupedItems[0].parts.length, 2);
+const dupHtml = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月28日",
+  problems: dupProblems,
+});
+assert.equal((dupHtml.match(/何時何分ですか/g) ?? []).length, 1);
+assert.equal((dupHtml.match(/あと何分で4時ですか/g) ?? []).length, 1);
+assert.equal((dupHtml.match(/<img /g) ?? []).length, 1);
+pass("同一小問の重複は1件にまとめ、共通図も1枚にする");
 const groupedHtml = buildPrintHtml({
   title: "お直し",
   childName: "はると",
@@ -763,7 +849,164 @@ assert.equal((groupedHtml.match(/<img /g) ?? []).length, 1);
 assert.match(groupedHtml, /何時何分ですか/);
 assert.match(groupedHtml, /あと何分で4時ですか/);
 assert.match(groupedHtml, /item-part/);
+const threeParts = explodeFigureItemsForPages([
+  {
+    kind: "figure",
+    id: "lever-many",
+    layout: "wide",
+    parentFigureSrc: FIGURE_PNG,
+    context: "てこが水平につり合う条件を調べました。",
+    parts: [
+      { number: 1, numberLabel: "(1)", stem: "変える条件は何ですか。" },
+      { number: 3, numberLabel: "(3)", stem: "実験の結果を表にまとめると" },
+      { number: 4, numberLabel: "(4)", stem: "ウの上と下のすき間に線香のけむりを近づけると" },
+    ],
+  },
+]);
+assert.equal(threeParts.length, 2);
+assert.equal(threeParts[0].parts.length, 2);
+assert.equal(threeParts[1].parts.length, 1);
+assert.equal(threeParts[1].parentFigureSrc, "");
+const threeHtml = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月31日",
+  scope: "all",
+  problems: [
+    {
+      id: "lever-1",
+      label: "1",
+      topicTag: "てこ",
+      visualType: "has_figure",
+      problemType: "science_social_diagram",
+      originalPath: "scans/lever.jpg",
+      parentContext: "てこが水平につり合う条件を調べました。",
+      parentFigureSrc: FIGURE_PNG,
+      parentFigureBox: [40, 50, 380, 950],
+      questionText: "(1) 変える条件は何ですか。",
+      isCorrect: false,
+      correctAnswer: "1",
+      parentCoachingTip: "",
+    },
+    {
+      id: "lever-3",
+      label: "3",
+      topicTag: "てこ",
+      visualType: "has_figure",
+      problemType: "science_social_diagram",
+      originalPath: "scans/lever.jpg",
+      parentContext: "てこが水平につり合う条件を調べました。",
+      parentFigureSrc: FIGURE_PNG,
+      parentFigureBox: [40, 50, 380, 950],
+      questionText: "(3) 実験の結果を表にまとめると",
+      isCorrect: false,
+      correctAnswer: "1",
+      parentCoachingTip: "",
+    },
+    {
+      id: "lever-4",
+      label: "4",
+      topicTag: "てこ",
+      visualType: "has_figure",
+      problemType: "science_social_diagram",
+      originalPath: "scans/lever.jpg",
+      parentContext: "てこが水平につり合う条件を調べました。",
+      parentFigureSrc: FIGURE_PNG,
+      parentFigureBox: [40, 50, 380, 950],
+      questionText: "(4) ウの上と下のすき間に線香のけむりを近づけると",
+      isCorrect: false,
+      correctAnswer: "1",
+      parentCoachingTip: "",
+    },
+  ],
+});
+assert.equal([...threeHtml.matchAll(/class="sheet/g)].length, 2);
+assert.match(threeHtml, /item-part \{\s*[\s\S]*?page-break-inside: avoid/);
+assert.match(threeHtml, /figure-media \{\s*[\s\S]*?page-break-inside: avoid/);
+assert.doesNotMatch(threeHtml, /img \{\s*break-inside: auto !important/);
 pass("同じ大問の共通図は1つだけ出し、小問を並べる");
+
+const pathVariantProblems = [
+  {
+    id: "lever-a",
+    label: "1",
+    topicTag: "てこ",
+    visualType: "has_figure",
+    problemType: "science_social_diagram",
+    originalPath: "user/scan-abc/original.jpg",
+    parentContext: "下の図のような手順で、てこが水平につり合うのはどれですか。",
+    parentFigureSrc: FIGURE_PNG,
+    parentFigureBox: [40, 50, 380, 950],
+    questionText: "(1) 変えるものを選びなさい。",
+    optionsText: "① おもりの重さ ② 支点からのきょり",
+    isCorrect: false,
+    correctAnswer: "1",
+    parentCoachingTip: "",
+  },
+  {
+    id: "lever-b",
+    label: "3",
+    topicTag: "てこ",
+    visualType: "has_figure",
+    problemType: "science_social_diagram",
+    originalPath: "file:///cache/original.jpg",
+    parentContext: "下の図のような手順で、てこが水平につり合うのはどれですか。",
+    parentFigureSrc: FIGURE_PNG,
+    subFigureSrc: FIGURE_PNG,
+    parentFigureBox: [45, 55, 385, 940],
+    subFigureBox: [560, 40, 960, 960],
+    questionText: "(3) 実験の結果を表にまとめると、正しいものをすべて選びなさい。",
+    optionsText: "① 支点からのきょりが2倍 ② おもりを2倍",
+    isCorrect: false,
+    correctAnswer: "1,2",
+    parentCoachingTip: "",
+  },
+];
+const pathMerged = flattenWorksheetItems(pathVariantProblems);
+assert.equal(pathMerged.length, 1);
+assert.equal(pathMerged[0].parts.length, 2);
+const pathHtml = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月28日",
+  problems: pathVariantProblems,
+});
+assert.equal((pathHtml.match(/class="figure-media parent-figure"/g) ?? []).length, 1);
+assert.equal((pathHtml.match(/class="figure-media sub-figure"/g) ?? []).length, 1);
+assert.equal((pathHtml.match(/変えるものを選びなさい/g) ?? []).length, 1);
+assert.equal((pathHtml.match(/実験の結果を表にまとめると/g) ?? []).length, 1);
+assert.match(pathHtml, /parent-figure img \{\s*max-height: 68mm/);
+assert.match(pathHtml, /sub-figure img \{\s*max-height: none/);
+const twoFigures = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月31日",
+  scope: "all",
+  problems: [
+    ...pathVariantProblems,
+    {
+      id: "candle-1",
+      label: "1",
+      topicTag: "ろうそく",
+      visualType: "has_figure",
+      problemType: "science_social_diagram",
+      originalPath: "scans/candle.jpg",
+      parentContext: "下の㋐〜㋓のようにして、ろうそくの燃え方を比べました。",
+      parentFigureSrc: FIGURE_PNG,
+      parentFigureBox: [70, 40, 420, 960],
+      questionText: "(1) ㋐のろうそくの火はこのあとどうなりますか。",
+      optionsText: "① すぐに消える ② しばらく燃えたあと消える",
+      isCorrect: false,
+      correctAnswer: "1",
+      parentCoachingTip: "",
+    },
+  ],
+});
+assert.equal([...twoFigures.matchAll(/class="sheet/g)].length, 2);
+assert.doesNotMatch(twoFigures, /1\/1/);
+assert.match(twoFigures, /1\/2/);
+assert.match(twoFigures, /2\/2/);
+pass("パス表記が違っても同一大問は1カード・親図1・表1にする");
 
 const outDir = join(root, "scripts/output");
 mkdirSync(outDir, { recursive: true });
@@ -862,6 +1105,63 @@ const secondImg = compoundHtml.indexOf("<img ", firstImg + 1);
 assert.ok(ctxAt >= 0 && firstImg > ctxAt && qAt > firstImg && secondImg > qAt && optAt > secondImg);
 assert.match(compoundHtml, /answer-box/);
 pass("複合問題は親図・設問・表・選択肢の順に並べる");
+
+const dupParentHtml = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月28日",
+  problems: [
+    {
+      id: "lever-dup",
+      label: "3",
+      topicTag: "てこ",
+      visualType: "has_figure",
+      problemType: "science_social_diagram",
+      parentContext: "下の図のような手順で、てこが水平につり合うのはどれですか。",
+      questionText: "(1) 正しいものを選びなさい。",
+      optionsText: "| おもり | きょり |\n| --- | --- |\n| 1個 | 2 |\n① ア ② イ",
+      parentFigureSrc: FIGURE_PNG,
+      subFigureSrc: FIGURE_PNG,
+      parentFigureBox: [40, 50, 380, 950],
+      isCorrect: false,
+      correctAnswer: "ア",
+      parentCoachingTip: "",
+    },
+  ],
+});
+assert.equal((dupParentHtml.match(/<img /g) ?? []).length, 1);
+assert.doesNotMatch(dupParentHtml, /\| おもり \|/);
+assert.match(dupParentHtml, /① ア/);
+pass("親図と同一の sub は二重描画せず、Markdown表テキストも出さない");
+
+const tableMarkdownHtml = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月28日",
+  problems: [
+    {
+      id: "lever-md",
+      label: "3",
+      topicTag: "てこ",
+      visualType: "has_figure",
+      problemType: "science_social_diagram",
+      parentContext: "下の図のような手順で、てこが水平につり合うのはどれですか。",
+      questionText: "(3) 実験の結果を表にまとめると、正しいものをすべて選びなさい。",
+      optionsText: "| おもりの数 | 支点からのきょり |\n| --- | --- |\n| 1個 | 6 |\n① ア ② イ ③ ウ",
+      parentFigureSrc: FIGURE_PNG,
+      subFigureSrc: FIGURE_PNG,
+      parentFigureBox: [40, 50, 380, 950],
+      subFigureBox: [420, 80, 680, 900],
+      isCorrect: false,
+      correctAnswer: "1,3",
+      parentCoachingTip: "",
+    },
+  ],
+});
+assert.equal((tableMarkdownHtml.match(/<img /g) ?? []).length, 2);
+assert.doesNotMatch(tableMarkdownHtml, /\| おもりの数 \|/);
+assert.match(tableMarkdownHtml, /① ア/);
+pass("表画像があるとき Markdown 表テキストは出さない");
 
 const tableOnlyHtml = buildPrintHtml({
   title: "お直し",
@@ -974,9 +1274,39 @@ const inferredSub = resolveSubFigureBox({
   parentFigureBox: [40, 50, 380, 950],
 });
 assert.ok(inferredSub);
-assert.ok(inferredSub[0] >= 600);
-assert.ok(inferredSub[0] <= 780);
-assert.ok(inferredSub[2] - inferredSub[0] >= 90);
+assert.ok(inferredSub[0] >= 500);
+assert.ok(inferredSub[0] <= 720);
+assert.ok(inferredSub[2] - inferredSub[0] >= 120);
+assert.ok(inferredSub[1] >= 30);
+assert.ok(inferredSub[3] <= 970);
+const tightTable = resolveSubFigureBox({
+  questionText: "(3) 実験の結果を表にまとめると下のようになりました。",
+  parentFigureBox: [40, 50, 380, 950],
+  subFigureBox: [760, 80, 900, 900],
+});
+assert.ok(tightTable);
+assert.ok(tightTable[0] >= 740);
+assert.ok(tightTable[1] >= 60);
+assert.ok(tightTable[2] <= 930);
+assert.ok(tightTable[3] <= 920);
+const tableWithChoices = resolveSubFigureBox({
+  questionText: "(3) 実験の結果を表にまとめると下のようになりました。次の①〜③からすべて選び、番号を書きましょう。",
+  optionsText: "① 支点からのきょりが2倍、3倍になると、おもりの重さは 1/2, 1/3 となる。\n② 支点からのきょりが2倍、3倍になると、おもりの重さも2倍、3倍になる。\n③ 左右のうでで、支点からのきょりとおもりの重さの積が同じになっている。",
+  parentFigureBox: [40, 50, 380, 950],
+  subFigureBox: [720, 70, 900, 910],
+});
+assert.ok(tableWithChoices);
+assert.ok(tableWithChoices[0] > 720, "選択肢①行を表クロップ上端から外す");
+assert.ok(tableWithChoices[2] >= 900, "表の最終行は切らない");
+const tableIntoOptions = resolveSubFigureBox({
+  questionText: "(3) 実験の結果を表にまとめると下のようになりました。次の①〜③からすべて選び、番号を書きましょう。",
+  optionsText: "③ 左右のうでで、支点からのきょりとおもりの重さの積が同じになっている。",
+  parentFigureBox: [40, 50, 380, 950],
+  subFigureBox: [700, 70, 980, 910],
+});
+assert.ok(tableIntoOptions);
+assert.ok(tableIntoOptions[2] < 980, "箱が①〜③帯まで伸びているときだけ下を切る");
+assert.ok(tableIntoOptions[2] >= 900, "切っても表の最終行は残す");
 const enriched = enrichPrintFigureBoxes([
   {
     id: "a",
@@ -1033,6 +1363,53 @@ assert.deepEqual(
   }),
   [40, 50, 380, 950],
 );
+const noSharedSolo = enrichPrintFigureBoxes([
+  {
+    id: "lever-solo",
+    questionText: "(1) 変える条件は何ですか。",
+    parentFigureBox: [40, 50, 380, 950],
+    visualType: "has_figure",
+  },
+  {
+    id: "candle-solo",
+    questionText: "(1) ろうそくの火はどうなりますか。",
+    parentFigureBox: [80, 40, 420, 960],
+    visualType: "has_figure",
+  },
+]);
+assert.deepEqual(noSharedSolo[0].parentFigureBox, [40, 50, 380, 950]);
+assert.deepEqual(noSharedSolo[1].parentFigureBox, [80, 40, 420, 960]);
+const mixedCards = flattenWorksheetItems([
+  {
+    id: "lever-card",
+    label: "1",
+    topicTag: "てこ",
+    visualType: "has_figure",
+    problemType: "science_social_diagram",
+    parentContext: "てこが水平につり合う条件を調べました。",
+    parentFigureSrc: FIGURE_PNG,
+    parentFigureBox: [40, 50, 380, 950],
+    questionText: "(1) 変える条件は何ですか。",
+    isCorrect: false,
+    correctAnswer: "1",
+    parentCoachingTip: "",
+  },
+  {
+    id: "candle-card",
+    label: "1",
+    topicTag: "ろうそく",
+    visualType: "has_figure",
+    problemType: "science_social_diagram",
+    parentContext: "下の㋐〜㋓のようにして、ろうそくの燃え方を比べました。",
+    parentFigureSrc: FIGURE_PNG,
+    parentFigureBox: [80, 40, 420, 960],
+    questionText: "(1) ㋐のろうそくの火はこのあとどうなりますか。",
+    isCorrect: false,
+    correctAnswer: "1",
+    parentCoachingTip: "",
+  },
+]);
+assert.equal(mixedCards.length, 2);
 const bothHtml = buildPrintHtml({
   title: "お直し",
   childName: "はると",
@@ -1108,18 +1485,28 @@ assert.match(printHook, /excluded\.has/);
 assert.match(printHook, /candidates/);
 assert.match(printHook, /resolvePrintImageUrls/);
 const scanImageSrc = readFileSync(join(root, "src/lib/files/scan-image.ts"), "utf8");
-assert.match(scanImageSrc, /FIGURE_CACHE_VERSION = 14/);
+assert.match(scanImageSrc, /FIGURE_CACHE_VERSION = 24/);
 assert.match(scanImageSrc, /isRawScanSourceUri/);
 assert.match(scanImageSrc, /expandFigureGeminiBox/);
 assert.match(scanImageSrc, /planExpandedFigureCrop/);
 assert.match(scanImageSrc, /cropFigureToBase64/);
-assert.match(scanImageSrc, /expanded-preserve/);
+assert.match(scanImageSrc, /expanded-preserve|expanded-table/);
 assert.match(scanImageSrc, /preserveExtent:\s*true/);
+assert.match(scanImageSrc, /asTable/);
+assert.match(readFileSync(join(root, "src/features/print/lib/bbox.mjs"), "utf8"), /clipFigureBottomBeforeBelow/);
+assert.match(readFileSync(join(root, "src/features/print/lib/bbox.mjs"), "utf8"), /FIGURE_BOTTOM_PAD = 0\.08/);
+assert.match(readFileSync(join(root, "src/features/print/lib/bbox.mjs"), "utf8"), /FIGURE_CAPTION_ROOM/);
+assert.match(readFileSync(join(root, "src/features/print/lib/bbox.mjs"), "utf8"), /FIGURE_STEM_CLEARANCE/);
+assert.match(readFileSync(join(root, "src/features/print/lib/bbox.mjs"), "utf8"), /asTable/);
+assert.match(readFileSync(join(root, "src/features/print/lib/document.mjs"), "utf8"), /normalizeShareScan/);
+assert.match(readFileSync(join(root, "src/features/print/lib/document.mjs"), "utf8"), /partWantsDataTable/);
+assert.match(readFileSync(join(root, "src/features/print/lib/figure-boxes.mjs"), "utf8"), /earliestStemBelowParent/);
 assert.match(scanImageSrc, /ensureLocalImageFile/);
 assert.match(scanImageSrc, /base64:\s*true/);
 assert.match(scanImageSrc, /data:image\/jpeg;base64/);
 assert.doesNotMatch(scanImageSrc, /if \(problem.figureImageSrc\) return problem/);
 const printService = readFileSync(join(root, "src/features/print/service.ts"), "utf8");
+assert.match(printService, /earliestStemBelowParent/);
 assert.match(printService, /printToFileAsync/);
 assert.match(printService, /width:/);
 assert.match(printService, /height:/);

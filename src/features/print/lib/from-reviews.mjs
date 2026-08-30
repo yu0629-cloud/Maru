@@ -183,7 +183,114 @@ export function selectProblemsForScope(problems, scope = "daily", preferredIds =
 }
 
 function mergeKey(problem) {
-  return `${problem.label}|${problem.topicTag}|${problem.correctAnswer}|${problem.questionText}`;
+  const id = String(problem?.id || problem?.problemId || "").trim();
+  if (id) return `id:${id}`;
+  return contentDedupeKey(problem);
+}
+
+function contextHaystack(problem) {
+  return normalizeOcrText(
+    String(problem?.parentContext || problem?.parent_context || problem?.contextText || problem?.context_text || ""),
+  )
+    .replace(/\s+/g, "")
+    .normalize("NFKC");
+}
+
+function normalizedStem(problem) {
+  const ctx = contextHaystack(problem);
+  let rawQ = normalizeOcrText(
+    String(problem?.questionText || problem?.question_text || problem?.stem || ""),
+  )
+    .replace(/\s+/g, "")
+    .normalize("NFKC");
+  if (ctx && rawQ.startsWith(ctx)) rawQ = rawQ.slice(ctx.length);
+  if (ctx && ctx.length >= 12 && rawQ.includes(ctx)) rawQ = rawQ.split(ctx).join("");
+  return rawQ
+    .replace(/^(?:問|No\.?|#)?[\(（\[]?[0-9０-９①-⑳㉑-㉟❶-❿㋐-㋾]+[\)）\]]?[.．、:：\s]*/i, "")
+    .replace(/次の[①-③0-9０-９〜~\-から選び、番号を書きましょう。]+$/u, "")
+    .trim();
+}
+
+function questionNumberToken(problem) {
+  const raw = String(
+    problem?.problemIndex || problem?.problem_index || problem?.label || problem?.problem_label || problem?.questionText || "",
+  )
+    .normalize("NFKC")
+    .replace(/\s+/g, "");
+  const match = raw.match(/(?:問)?[\(（\[]?([0-9０-９]{1,2})[\)）\]]?/);
+  if (!match) return "";
+  return match[1].replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0));
+}
+
+function scanToken(problem) {
+  const raw = String(problem?.originalPath || problem?.original_path || problem?.scanId || problem?.scan_id || "")
+    .trim()
+    .replace(/[?#].*$/, "");
+  if (!raw) return "";
+  return (raw.split(/[/\\]/).filter(Boolean).pop() || raw).toLowerCase();
+}
+
+/** 問題文＋大問文脈で同一小問を判定（番号表記ゆれを吸収） */
+export function contentDedupeKey(problem) {
+  const ctx = normalizeOcrText(
+    String(problem?.parentContext || problem?.parent_context || problem?.contextText || problem?.context_text || ""),
+  )
+    .replace(/\s+/g, "")
+    .normalize("NFKC")
+    .slice(0, 96);
+  let rawQ = normalizeOcrText(
+    String(problem?.questionText || problem?.question_text || problem?.stem || ""),
+  )
+    .replace(/\s+/g, "")
+    .normalize("NFKC");
+  if (ctx && rawQ.startsWith(ctx)) rawQ = rawQ.slice(ctx.length);
+  // リード文が question に混ざっている場合も落とす
+  if (ctx && ctx.length >= 12 && rawQ.includes(ctx)) rawQ = rawQ.split(ctx).join("");
+  const q = rawQ
+    .replace(/^(?:問|No\.?|#)?[\(（\[]?[0-9０-９①-⑳㉑-㉟❶-❿㋐-㋾]+[\)）\]]?[.．、:：\s]*/i, "")
+    .slice(0, 120);
+  // 正解の表記ゆれで同一小問が二重に残るのを防ぐ（解答欄内容はキーに使わない）
+  return `q:${ctx}|${q}`;
+}
+
+/** 文脈が空でも同一設問文なら同じ小問（正解の食い違いは無視） */
+export function stemDedupeKey(problem) {
+  const q = normalizedStem(problem).slice(0, 80);
+  if (q.length < 18) return "";
+  return `stem:${q}`;
+}
+
+/** 同一スキャンの同じ小問番号 */
+export function scanNumberDedupeKey(problem) {
+  const scan = scanToken(problem);
+  const num = questionNumberToken(problem);
+  if (!scan || !num) return "";
+  return `sn:${scan}|${num}`;
+}
+
+/**
+ * 同一小問の重複を除去。id 優先、なければ問題文＋親文脈。
+ * 先勝ち（scans → extras → reviews の順を保つ）。
+ */
+export function dedupePrintProblems(problems) {
+  const out = [];
+  const seenId = new Set();
+  const seenContent = new Set();
+  for (const problem of problems ?? []) {
+    if (!problem) continue;
+    const id = String(problem.id || problem.problemId || "").trim();
+    if (id) {
+      if (seenId.has(id)) continue;
+      seenId.add(id);
+    }
+    const keys = [contentDedupeKey(problem), stemDedupeKey(problem), scanNumberDedupeKey(problem)].filter(
+      (key) => key && key !== "q:||",
+    );
+    if (keys.some((key) => seenContent.has(key))) continue;
+    for (const key of keys) seenContent.add(key);
+    out.push(problem);
+  }
+  return out;
 }
 
 /**
@@ -203,13 +310,20 @@ export function collectPrintProblems(input = {}) {
   for (const problem of [...fromScans, ...fromExtras, ...fromReviews]) {
     if (!hasPrintableQuestion(problem)) continue;
     const key = mergeKey(problem);
-    if (seen.has(key)) continue;
+    const extras = [contentDedupeKey(problem), stemDedupeKey(problem), scanNumberDedupeKey(problem)].filter(
+      (item) => item && item !== "q:||",
+    );
+    if (seen.has(key) || extras.some((item) => seen.has(item))) continue;
     seen.add(key);
+    for (const item of extras) seen.add(item);
     merged.push(problem);
   }
-  if (merged.length) {
-    return selectProblemsForScope(merged, input.scope ?? "all", input.preferredIds ?? []);
+  const unique = dedupePrintProblems(merged);
+  if (unique.length) {
+    return selectProblemsForScope(unique, input.scope ?? "all", input.preferredIds ?? []);
   }
-  const fallback = (input.fallback ?? []).filter(isIncorrectForPrint).filter(hasPrintableQuestion);
+  const fallback = dedupePrintProblems(
+    (input.fallback ?? []).filter(isIncorrectForPrint).filter(hasPrintableQuestion),
+  );
   return selectProblemsForScope(fallback, input.scope ?? "all", input.preferredIds ?? []);
 }

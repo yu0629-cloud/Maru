@@ -8,6 +8,11 @@ export function looksLikeParentFigureBox(
 ): boolean;
 export function inferTableBoxBelow(
   parent?: [number, number, number, number] | null,
+  item?: object | null,
+): [number, number, number, number] | null;
+export function trimTableBoxExcludingChoices(
+  box?: unknown,
+  item?: object | null,
 ): [number, number, number, number] | null;
 export function resolveSubFigureBox(
   item?: object | null,

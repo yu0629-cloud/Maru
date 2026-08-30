@@ -24,6 +24,195 @@ html, body {
   page-break-after: auto;
   break-after: auto;
 }
+/* ヘッダー直後で改ページされ、1枚目が空白になるのを防ぐ */
+.sheet > header {
+  break-after: avoid-page;
+  page-break-after: avoid;
+}
+.sheet > .print-body {
+  break-before: avoid-page;
+  page-break-before: avoid;
+}
+.print-body > .item:first-child {
+  break-before: avoid-page;
+  page-break-before: avoid;
+}
+img {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+.item-row {
+  display: flex;
+  flex-direction: row;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.item-row > .item {
+  flex: 1 1 0;
+  margin-bottom: 0;
+  min-width: 0;
+}
+.item {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  border: 1.5px solid #d0d0d0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  background: #fff;
+  box-sizing: border-box;
+  min-height: 48px;
+}
+.item-compact {
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+.item-head {
+  font-size: 14px;
+  line-height: 1.5;
+  color: #222;
+}
+.item-head .num {
+  font-size: 14px;
+  font-weight: 400;
+  color: #666;
+  margin-right: 8px;
+}
+.item-stem .num {
+  font-size: 14px;
+  font-weight: 400;
+  color: #666;
+  margin-right: 8px;
+}
+.num-square {
+  font-weight: 700;
+  color: #222;
+}
+.item-context {
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.5;
+  color: #333;
+  white-space: pre-wrap;
+}
+.item-stem {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: #222;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.item-options {
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.5;
+  color: #222;
+  white-space: pre-wrap;
+}
+.item-part {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+.item-stem,
+.item-options,
+.item-context {
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+.item-part + .item-part {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #eee;
+}
+.answer-box {
+  flex: 0 0 auto;
+  width: 60px;
+  height: 35px;
+  border: 2px solid #333;
+  border-radius: 4px;
+  box-sizing: border-box;
+  background: #fff;
+  margin-top: 2px;
+}
+.item-figure img,
+.figure-media img {
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  object-fit: contain;
+  object-position: top center;
+  display: block;
+  margin: 0 auto;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+.figure-media {
+  position: relative;
+  width: min(var(--crop-w, 100%), 100%);
+  max-width: 100%;
+  margin: 0 auto;
+  text-align: center;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+.figure-media.parent-figure img {
+  max-height: 68mm;
+}
+.figure-media.sub-figure {
+  width: 100%;
+}
+.figure-media.sub-figure img {
+  max-height: none;
+}
+/* 大問カード全体は小問のあいだで折り返してよい。図・表・小問は分割しない */
+.item-figure {
+  page-break-inside: auto;
+  break-inside: auto;
+  break-before: auto;
+  page-break-before: auto;
+}
+.figure-media.parent-figure,
+.figure-media.sub-figure {
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+.figure-mask {
+  position: absolute;
+  background: #fff;
+  pointer-events: none;
+}
+.answer-frame {
+  min-height: 20mm;
+  border: 2px solid #333;
+  border-radius: 6px;
+  margin-top: 4px;
+  background: #fff;
+  box-sizing: border-box;
+}
+.passage-block {
+  white-space: pre-wrap;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #222;
+  background: #fbfbfb;
+}
 </style>
 </head>
 <body>
@@ -37,30 +226,28 @@ html, body {
           <span>2026年8月26日</span>
         </div>
       </header>
-      <div><div class="item" style="display: flex; flex-direction: row; align-items: center; justify-content: space-between; border: 1.5px solid #d0d0d0; border-radius: 8px; padding: 10px 14px; margin-bottom: 10px; background: #fff; box-sizing: border-box; min-height: 60px; page-break-inside: avoid;">
-  <div style="display: flex; flex-direction: row; align-items: center; font-size: 22px; font-weight: bold; color: #222; white-space: nowrap;">
-    <span style="font-size: 15px; color: #666; margin-right: 10px;">(1)</span>
-    <span>3 + 4 =</span>
-  </div>
-  <div class="answer-box" style="width: 60px; height: 35px; border: 2px solid #333; display: inline-block; box-sizing: border-box;">&nbsp;</div>
-</div><div class="item" style="display: flex; flex-direction: row; align-items: center; justify-content: space-between; border: 1.5px solid #d0d0d0; border-radius: 8px; padding: 10px 14px; margin-bottom: 10px; background: #fff; box-sizing: border-box; min-height: 60px; page-break-inside: avoid;">
-  <div style="display: flex; flex-direction: row; align-items: center; font-size: 22px; font-weight: bold; color: #222; white-space: nowrap;">
-    <span style="font-size: 15px; color: #666; margin-right: 10px;">(2)</span>
-    <span>「ちゅうい」の「ちゅう」</span>
-  </div>
-  <div class="answer-box" style="width: 60px; height: 35px; border: 2px solid #333; display: inline-block; box-sizing: border-box;">&nbsp;</div>
-</div><div class="item" style="display: flex; flex-direction: row; align-items: center; justify-content: space-between; border: 1.5px solid #d0d0d0; border-radius: 8px; padding: 10px 14px; margin-bottom: 10px; background: #fff; box-sizing: border-box; min-height: 60px; page-break-inside: avoid;">
-  <div style="display: flex; flex-direction: row; align-items: center; font-size: 22px; font-weight: bold; color: #222; white-space: nowrap;">
-    <span style="font-size: 15px; color: #666; margin-right: 10px;">(3)</span>
-    <span>切り口はどんな形ですか</span>
-  </div>
-  <div class="answer-box" style="width: 60px; height: 35px; border: 2px solid #333; display: inline-block; box-sizing: border-box;">&nbsp;</div>
-</div><div class="item" style="display: flex; flex-direction: row; align-items: center; justify-content: space-between; border: 1.5px solid #d0d0d0; border-radius: 8px; padding: 10px 14px; margin-bottom: 10px; background: #fff; box-sizing: border-box; min-height: 60px; page-break-inside: avoid;">
-  <div style="display: flex; flex-direction: row; align-items: center; font-size: 22px; font-weight: bold; color: #222; white-space: nowrap;">
-    <span style="font-size: 15px; color: #666; margin-right: 10px;">(4)</span>
-    <span>空欄に入る言葉を書きなさい</span>
-  </div>
-  <div class="answer-box" style="width: 60px; height: 35px; border: 2px solid #333; display: inline-block; box-sizing: border-box;">&nbsp;</div>
+      <div class="print-body"><div class="item-row"><div class="item item-compact">
+  <div class="item-stem"><span class="num">(1)</span>3 + 4 =</div>
+  <div class="answer-box">&nbsp;</div>
+</div><div class="item item-compact">
+  <div class="item-stem"><span class="num">(2)</span>「ちゅうい」の「ちゅう」</div>
+  <div class="answer-box">&nbsp;</div>
+</div></div><div class="item item-figure">
+  
+  
+  <div class="item-part">
+  <div class="item-stem"><span class="num num-square">[ 3 ]</span>切り口はどんな形ですか</div>
+  
+  
+  <div class="answer-frame">&nbsp;</div>
+</div>
+</div><div class="item item-passage">
+  <div class="item-head"><span class="num">(4)</span></div>
+  <div class="passage-block">空欄に入る言葉を書きなさい</div>
+  
+  
+  
+  <div style="display: flex; justify-content: flex-end;"><div class="answer-box">&nbsp;</div></div>
 </div></div>
       <footer style="margin-top: 8px; text-align: center; font-size: 10px; color: #6b7280;">1/1</footer>
     </section>

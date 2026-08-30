@@ -19,10 +19,12 @@ import {
   needsDataTableVisual,
   resolveParentFigureBox,
   resolveSubFigureBox,
+  earliestStemBelowParent,
   styleToGridType,
   subFigureBoxOf,
 } from "@/src/features/print/html";
 import type { PrintDocumentInput, PrintProblem } from "@/src/features/print/html";
+import { usableGeminiBox } from "@/src/features/print/lib/bbox.mjs";
 
 export type GeneratedPrint = {
   html: string;
@@ -177,6 +179,10 @@ export async function resolvePrintImageUrls(problems: PrintProblem[]): Promise<P
           imageSrc: "",
           figureImageSrc: "",
           figureBase64: "",
+          parentFigureSrc: "",
+          parentFigureBase64: "",
+          subFigureSrc: "",
+          subFigureBase64: "",
         };
       }
       const signedOriginal = isStorageObjectPath(problem.originalPath ?? "")
@@ -191,6 +197,17 @@ export async function resolvePrintImageUrls(problems: PrintProblem[]): Promise<P
         visual = "has_figure";
       }
       if (visual === "has_figure") {
+        // 古い切り抜きキャッシュを捨て、生スキャンから取り直す
+        const cleared = {
+          ...problem,
+          figureImageSrc: "",
+          figureBase64: "",
+          parentFigureSrc: "",
+          parentFigureBase64: "",
+          subFigureSrc: "",
+          subFigureBase64: "",
+          imageSrc: "",
+        };
         const rawSource = [problem.originalImageSrc, signedOriginal]
           .map((uri) => String(uri ?? "").trim())
           .find((uri) => isRawScanSourceUri(uri));
@@ -205,10 +222,15 @@ export async function resolvePrintImageUrls(problems: PrintProblem[]): Promise<P
         });
         if (!parentBox && !subBox && !legacyBox) {
           maruLog("figure", "fallback to text: no crop_box", { id: problem.id });
-          return { ...problem, ...asFigurePayload(""), parentFigureSrc: "", subFigureSrc: "" };
+          return { ...cleared, ...asFigurePayload(""), parentFigureSrc: "", subFigureSrc: "" };
         }
         try {
-          const cropOne = async (box: typeof parentBox, suffix: string) => {
+          const cropOne = async (
+            box: typeof parentBox,
+            suffix: string,
+            asTable = false,
+            clipBelow: unknown = null,
+          ) => {
             if (!box || !rawSource) return "";
             return (
               (await cropFigureToBase64({
@@ -216,13 +238,23 @@ export async function resolvePrintImageUrls(problems: PrintProblem[]): Promise<P
                 cropBox: box,
                 scanId: String(problem.originalPath || problem.id),
                 problemId: `${problem.id}-${suffix}`,
-                answerBBox: problem.bbox ?? null,
+                answerBBox: asTable ? null : clipBelow,
                 visualType: "has_figure",
+                asTable,
               })) ?? ""
             );
           };
-          const parentSrc = await cropOne(parentBox || legacyBox, "p");
-          const subSrc = await cropOne(subBox, "s");
+          const parentClipBelow =
+            earliestStemBelowParent(enriched, parentBox || legacyBox, problem) ??
+            usableGeminiBox(problem.bbox) ??
+            null;
+          const subTop = usableGeminiBox(subBox);
+          const clipTop = (box: typeof parentClipBelow) =>
+            box ? Math.min(box[0], box[2]) : Infinity;
+          const clipBelow =
+            clipTop(parentClipBelow) <= clipTop(subTop) ? parentClipBelow ?? subTop : subTop ?? parentClipBelow;
+          const parentSrc = await cropOne(parentBox || legacyBox, "p", false, clipBelow);
+          const subSrc = await cropOne(subBox, "s", true, null);
           const printable = parentSrc.startsWith("data:image/")
             ? parentSrc
             : subSrc.startsWith("data:image/")
@@ -230,10 +262,10 @@ export async function resolvePrintImageUrls(problems: PrintProblem[]): Promise<P
               : "";
           if (!printable) {
             maruLog("figure", "fallback to text: raw crop failed", { id: problem.id });
-            return { ...problem, ...asFigurePayload(""), parentFigureSrc: "", subFigureSrc: "" };
+            return { ...cleared, ...asFigurePayload(""), parentFigureSrc: "", subFigureSrc: "" };
           }
           return {
-            ...problem,
+            ...cleared,
             visualType: "has_figure",
             ...asFigurePayload(printable),
             parentFigureBox: parentBox ?? problem.parentFigureBox,
@@ -249,7 +281,7 @@ export async function resolvePrintImageUrls(problems: PrintProblem[]): Promise<P
             id: problem.id,
             error: error instanceof Error ? error.message : error,
           });
-          return { ...problem, ...asFigurePayload(""), parentFigureSrc: "", subFigureSrc: "" };
+          return { ...cleared, ...asFigurePayload(""), parentFigureSrc: "", subFigureSrc: "" };
         }
       }
       return problem;
