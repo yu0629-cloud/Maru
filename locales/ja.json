@@ -277,7 +277,7 @@
     "startScan": "スキャンを開始する",
     "scanning": "スキャン中…",
     "pickLibrary": "ライブラリから選択",
-    "opening": "開いています…",
+    "opening": "紙を検出しています…",
     "holdTitle": "プリントをかざすだけ",
     "autoHint": "プリントをカメラにかざすだけで自動認識・自動撮影します",
     "webDemo": "Web ではデモ撮影になります",

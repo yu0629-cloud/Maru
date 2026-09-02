@@ -57,10 +57,12 @@ export type GradeProblem = {
   problem_index: string;
   question_text: string;
   bbox: GeminiBBox;
+  marker_coordinate?: [number, number] | null;
   is_correct: boolean;
   student_answer: string;
   answer_type?: "handwritten_text" | "circle_selection" | "none";
   is_blank?: boolean;
+  teacher_mark?: "circle" | "check" | "cross" | "none";
   correct_answer: string;
   topic_tag: string;
   difficulty_level: DifficultyLevel;
@@ -111,9 +113,10 @@ export type CarteJson = {
 
 /**
  * Gemini に出させる抽出キー。ground_truth は手書きを見る前に問題・図から導く。
- * is_correct は ground_truth と student_answer の比較。サーバ側でも再判定する。
+ * teacher_mark は先生の赤ペン（circle/check/cross/none）。is_correct は ground_truth と student_answer の比較。赤〇は正解の根拠にしない。赤×は不正解。サーバ側でも再判定する。
  * problem_index は問番号（"3", "16"）。question_text は解く式や設問文。番号だけは禁止。
  * bbox は手書き文字、または手書きの丸で囲まれた対象 [ymin, xmin, ymax, xmax]（各 0〜1000）。図や設問文全体ではない。
+ * marker_coordinate は 〇×を置く中心 [y, x]（0〜1000）。手書きのすぐ左横、または解答欄の直前。問題文の上に重ねない。
  * answer_type は handwritten_text / circle_selection / none。未記入は is_blank=true。
  * visual_type は文字だけで解けるか、図が必要か、長文本文が必要か。
  * question_unit は復習用の完全ユニット。parent_context / question_text / options_text / parent_figure_box / sub_figure_box。
@@ -163,7 +166,7 @@ export const GRADE_RESPONSE_SCHEMA = {
           ground_truth: {
             type: "STRING",
             description:
-              "Step1: the true answer YOU derive from the printed problem, figure, protractor marks, and word bank — BEFORE reading handwriting. Example: acute angle on a protractor → 50°. NEVER copy the child's writing. If there is a word bank, pick only from those options.",
+              "Independently derived true answer for THIS item BEFORE reading handwriting (Step 2). Use only the printed stem, figure, table, and choices on this page. Never copy the child's writing. Never use a memorized answer key for a specific worksheet. If there is a word bank, pick only from those options.",
           },
           student_answer: {
             type: "STRING",
@@ -179,12 +182,19 @@ export const GRADE_RESPONSE_SCHEMA = {
           },
           is_blank: {
             type: "BOOLEAN",
-            description: "true when no child handwriting is visible for this item. Then student_answer must be empty.",
+            description: "true when no child handwriting is visible for this item. Then student_answer must be empty (treat as null).",
+          },
+          teacher_mark: {
+            type: "STRING",
+            format: "enum",
+            enum: ["circle", "check", "cross", "none"],
+            description:
+              "Teacher's RED grading mark near the answer — NOT the child's pencil circle around a choice. Record only: circle=red 〇, check=red check/レ, cross=red ×, none=no red mark or too faint. A red 〇 does not prove the scientific/academic answer. Never confuse with answer_type=circle_selection.",
           },
           is_correct: {
             type: "BOOLEAN",
             description:
-              "Step3: true only if student_answer matches ground_truth. If they differ, MUST be false. Single-choice: handwritten 1 vs derived 2 is false. Never mark true just because the child wrote something. For select-all, missing any required choice is false.",
+              "true only if student_answer is an exact match to the independently derived ground_truth. If they differ by even one character (ground_truth 2 vs handwritten 1), MUST be false. A teacher's red 〇 does NOT make this true. Red × is false. Select-all missing any choice is false. Blank is false.",
           },
           correct_answer: {
             type: "STRING",
@@ -202,6 +212,14 @@ export const GRADE_RESPONSE_SCHEMA = {
               "Coordinates of the handwriting itself, or of the printed choice that has a hand-drawn circle. NOT the whole formula, NOT the figure, NOT uncircled labels. [ymin,xmin,ymax,xmax] 0-1000. Empty fill-in slots: the blank only.",
             minItems: 4,
             maxItems: 4,
+            items: { type: "NUMBER" },
+          },
+          marker_coordinate: {
+            type: "ARRAY",
+            description:
+              "Center [y, x] in 0-1000 for the 〇/× mark. Immediately LEFT of the child's handwriting, or just before the answer slot. Never on the printed stem, figure, or choice text. Example: handwriting at xmin=420 → marker x around 390, same y as the writing.",
+            minItems: 2,
+            maxItems: 2,
             items: { type: "NUMBER" },
           },
           visual_type: {
@@ -300,11 +318,13 @@ export const GRADE_RESPONSE_SCHEMA = {
           "student_answer",
           "answer_type",
           "is_blank",
+          "teacher_mark",
           "is_correct",
           "correct_answer",
           "type",
           "topic",
           "bbox",
+          "marker_coordinate",
           "visual_type",
           "crop_box",
           "question_unit",
@@ -316,11 +336,13 @@ export const GRADE_RESPONSE_SCHEMA = {
           "student_answer",
           "answer_type",
           "is_blank",
+          "teacher_mark",
           "is_correct",
           "correct_answer",
           "type",
           "topic",
           "bbox",
+          "marker_coordinate",
           "visual_type",
           "crop_box",
           "question_unit",

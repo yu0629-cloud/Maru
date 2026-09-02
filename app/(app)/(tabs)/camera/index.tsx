@@ -13,7 +13,7 @@ import { ensureAtLeastOneChild } from "@/src/features/children/service";
 import { useCurrentChild } from "@/src/hooks/useCurrentChild";
 import { useEnsureDemoChild } from "@/src/hooks/useEnsureDemoChild";
 import { useQuota } from "@/src/hooks/useQuota";
-import { persistScanImage, SCAN_CAPTURE_QUALITY } from "@/src/lib/files/scan-image";
+import { cropPaperFromPhoto, persistScanImage, SCAN_CAPTURE_QUALITY } from "@/src/lib/files/scan-image";
 import {
   DocumentScanCancelledError,
   DocumentScanUnavailableError,
@@ -183,7 +183,12 @@ function CameraBody() {
         if (batchJobs.length > 0) useScanQueueStore.getState().startFreshBatch();
       }
       for (const asset of picked) {
-        if (!(await enqueueUri(asset.uri, { width: asset.width, height: asset.height }, child))) break;
+        const paper = await cropPaperFromPhoto(asset.uri, { width: asset.width, height: asset.height });
+        const uri = paper?.uri ?? asset.uri;
+        const size = paper
+          ? { width: paper.width, height: paper.height }
+          : { width: asset.width, height: asset.height };
+        if (!(await enqueueUri(uri, size, child))) break;
       }
     } catch (error) {
       maruLog("camera", "library error", error);

@@ -33,6 +33,7 @@ export type PrintProblem = {
   croppedPath?: string;
   originalPath?: string;
   localUri?: string;
+  figureMasks?: Array<{ x: number; y: number; width: number; height: number }>;
   printFigureRev?: number;
   bbox?: [number, number, number, number];
   cropBox?: { x: number; y: number; width: number; height: number };
@@ -144,7 +145,11 @@ export {
   referencedPartTokens,
   formatSquareNumber,
   formatRoundNumber,
+  formatMajorSubLabel,
+  parseMajorSub,
+  displayProblemNumber,
   matchLeadingQuestionNumber,
+  looksLikeProblemStemText,
   flattenWorksheetItems,
   explodeFigureItemsForPages,
   mergeSharedFigureItems,

@@ -58,6 +58,7 @@ assert.match(cameraSrc, /t\("camera.reviewList"\)/);
 assert.match(cameraSrc, /scan\/\$\{job\.scanId\}/);
 assert.match(cameraSrc, /t\("camera.startScan"\)/);
 assert.match(cameraSrc, /t\("camera.pickLibrary"\)/);
+assert.match(cameraSrc, /cropPaperFromPhoto/);
 assert.match(cameraSrc, /ScanCaptureStage/);
 assert.match(cameraSrc, /hitSlop=\{TAP_HIT_SLOP\}/);
 assert.match(cameraSrc, /paddingBottom: 12/);
@@ -71,6 +72,36 @@ assert.doesNotMatch(cameraSrc, /丸付けする/);
 assert.doesNotMatch(cameraSrc, /AnalyzingOverlay/);
 assert.doesNotMatch(cameraSrc, /runGradePipeline/);
 pass("撮影画面はネイティブスキャナーの連続バッチ。完了を待たない");
+
+const { paperCropFromProfiles, contentSpanFromSizes, quietCenterSpan, remapGeminiBoxToPaper } = await import(
+  pathToFileURL(join(root, "src/lib/scan/paper-bounds.mjs")).href,
+);
+assert.equal(contentSpanFromSizes([900, 910, 920, 930, 940, 950, 960, 970]), null, "均一な用紙スキャンは切らない");
+const photoRows = [200, 210, 800, 820, 850, 840, 830, 810, 220, 190];
+const photoCols = [180, 200, 780, 800, 820, 810, 790, 210, 190, 180];
+const paper = paperCropFromProfiles(photoRows, photoCols);
+assert.ok(paper, "机の余白がある写真は用紙だけ残す");
+assert.ok(paper.x > 0.05 && paper.y > 0.05, "端の机を落とす");
+assert.ok(paper.width > 0.45 && paper.height > 0.45, "用紙本体は残す");
+const textureRows = [900, 880, 400, 390, 410, 400, 395, 405, 870, 910];
+const textureCols = [920, 890, 380, 400, 410, 395, 405, 390, 880, 900];
+assert.ok(quietCenterSpan(textureRows), "テクスチャ机は端を落とす");
+const textured = paperCropFromProfiles(textureRows, textureCols);
+assert.ok(textured, "木目机の写真も用紙だけ残す");
+assert.ok(textured.x > 0.05 && textured.y > 0.05, "テクスチャ端を落とす");
+assert.ok(textured.width > 0.45 && textured.height > 0.45, "用紙本体は残す");
+const remapped = remapGeminiBoxToPaper([174, 521, 455, 873], { x: 0.1, y: 0.08, width: 0.82, height: 0.84 });
+assert.ok(remapped, "全ページ箱を用紙空間へ写す");
+assert.ok(remapped[0] >= 0 && remapped[3] <= 1000, "写した箱は 0〜1000");
+assert.equal(remapGeminiBoxToPaper([10, 10, 40, 40], { x: 0.5, y: 0.5, width: 0.4, height: 0.4 }), null);
+const scanImageSrc = readFileSync(join(root, "src/lib/files/scan-image.ts"), "utf8");
+assert.match(scanImageSrc, /cropPaperFromPhoto/);
+assert.match(scanImageSrc, /compressScanForGrade/);
+assert.match(scanImageSrc, /remapGeminiBoxToPaper/);
+assert.match(scanImageSrc, /paper crop applied/);
+assert.match(scanImageSrc, /figureCacheToken/);
+assert.match(scanImageSrc, /paper crop none/);
+pass("ライブラリ写真は用紙を検出してから採点する");
 
 const appJson = JSON.parse(readFileSync(join(root, "app.json"), "utf8"));
 assert.match(JSON.stringify(appJson.expo.plugins), /react-native-document-scanner-plugin/);

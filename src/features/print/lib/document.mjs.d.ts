@@ -147,6 +147,18 @@ export function geminiBBoxToNormalizedBox(bbox: unknown): {
 };
 export function coerceGeminiBox(value?: unknown): [number, number, number, number] | null;
 export function usableGeminiBox(value?: unknown): [number, number, number, number] | null;
+export function clipFigureToOverlappingPanel(
+  figure?: unknown,
+  problemBox?: unknown,
+): [number, number, number, number] | null;
+export function swallowedStemMasksInCrop(
+  cropGemini?: unknown,
+  stemBoxes?: unknown[],
+  options?: { maxWidthFrac?: number },
+): Array<{ x: number; y: number; width: number; height: number }>;
+export function combineFigureMasks(
+  ...groups: Array<Array<{ x: number; y: number; width: number; height: number }> | unknown>
+): Array<{ x: number; y: number; width: number; height: number }>;
 export function geminiBoxToPixelCrop(
   box: unknown,
   imageWidth: number,

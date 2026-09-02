@@ -99,6 +99,40 @@ export function coerceGeminiBBox(value, index, total) {
   return parseGeminiBBox(value) ?? placeholderBBox(index, total);
 }
 
+const MARKER_HALF = 18;
+
+/** Gemini marker_coordinate [y, x] 0〜1000。不正なら null */
+export function parseMarkerCoordinate(value) {
+  if (!Array.isArray(value) || value.length < 2) return null;
+  const y = Number(value[0]);
+  const x = Number(value[1]);
+  if (!Number.isFinite(y) || !Number.isFinite(x)) return null;
+  if (y < 0 || y > 1000 || x < 0 || x > 1000) return null;
+  return [Math.round(y), Math.round(x)];
+}
+
+/** 〇×を置くための小さな bbox。手書きの左横／解答欄直前の中心点から作る */
+export function bboxFromMarkerCoordinate(value) {
+  const point = parseMarkerCoordinate(value);
+  if (!point) return null;
+  const [y, x] = point;
+  return [
+    Math.max(0, y - MARKER_HALF),
+    Math.max(0, x - MARKER_HALF),
+    Math.min(1000, y + MARKER_HALF),
+    Math.min(1000, x + MARKER_HALF),
+  ];
+}
+
+export function resolveOverlayBBox(item, index, total) {
+  const fromMarker = bboxFromMarkerCoordinate(item?.marker_coordinate);
+  if (fromMarker) return fromMarker;
+  const original = coerceGeminiBBox(item?.bbox, index, total);
+  return (
+    snapBBoxToAnswerSlot(original, item?.parent_figure_box, item?.sub_figure_box, item?.answer_type) ?? original
+  );
+}
+
 export function normalizeShortText(value) {
   return String(value ?? "")
     .normalize("NFKC")
@@ -132,7 +166,7 @@ export function splitAnswerItems(text) {
   return parts.length ? parts : [];
 }
 
-/** ground_truth と手書きを厳密比較。一部選択は不正解。°/度は同一視 */
+/** ground_truth と手書きを厳密比較。1文字違い（1と2）は不正解。一部選択も不正解。°/度は同一視 */
 export function answersMatchStrict(studentAnswer, groundTruth) {
   const studentRaw = String(studentAnswer ?? "").trim();
   const truthRaw = String(groundTruth ?? "").trim();
@@ -195,17 +229,18 @@ function answersLookCopied(student, ground) {
 
 /**
  * Gemini が手書きを ground_truth にコピーしたときの誤〇を落とす。
- * - すべて選び + 3択以上なのに答えが1つだけ、かつ key が答案と同じ
+ * - その小問が「すべて選び」で、3択以上なのに答えが1つだけ、かつ key が答案と同じ
  * - 語群に補角ペア（50°と130°など）があり、答案＝コピーされた key なら鋭角側を採用
+ * 他の小問の「すべて選び」は見ない（単一選択の正解まで不正解にしない）。
  */
 export function applyCopiedAnswerGuards(item, isCorrect, pageHay = "") {
   const ground = item.ground_truth || item.correct_answer;
-  const hay = [item.question_text, item.topic, item.passage_text, item.context_text, item.options_text, item.word_bank, ground, pageHay]
+  const localHay = [item.question_text, item.options_text, item.word_bank]
     .filter(Boolean)
     .join(" ");
   const copied = answersLookCopied(item.student_answer, ground);
 
-  if (looksLikeSelectAll(hay) && optionCountHint(hay) >= 3) {
+  if (looksLikeSelectAll(localHay) && optionCountHint(localHay) >= 3) {
     const studentOpts = splitOptionNumbers(item.student_answer);
     const truthOpts = splitOptionNumbers(ground);
     if (studentOpts.length === 1 && (copied || truthOpts.length <= 1)) {
@@ -213,12 +248,12 @@ export function applyCopiedAnswerGuards(item, isCorrect, pageHay = "") {
     }
   }
 
-  const pair = findSupplementaryDegreePair(hay);
+  const pair = findSupplementaryDegreePair([localHay, pageHay].join(" "));
   const studentDeg = parseNumberToken(item.student_answer);
   if (pair && studentDeg !== null && (studentDeg === pair[0] || studentDeg === pair[1])) {
     const groundDeg = parseNumberToken(ground);
     if (copied || groundDeg === null || groundDeg === studentDeg) {
-      const expected = /鈍角/.test(hay) ? pair[1] : pair[0];
+      const expected = /鈍角/.test(localHay) ? pair[1] : pair[0];
       return numbersEqual(studentDeg, expected);
     }
   }
@@ -376,6 +411,121 @@ function looksLikePrintedFormula(text) {
   return /[0-9０-９].*[+\-×÷＋−*/=＝]/.test(value) || /[+\-×÷＋−*/=＝].*[0-9０-９]/.test(value);
 }
 
+/** 先生の赤ペン採点。circle/check=正解、cross=不正解、none=自律判定 */
+export function normalizeTeacherMark(value) {
+  const raw = String(value ?? "")
+    .normalize("NFKC")
+    .trim()
+    .toLowerCase();
+  if (!raw || raw === "none" || raw === "unmarked" || raw === "blank" || raw === "pending") return "none";
+  if (/^(check|tick|レ)$/.test(raw) || /レ点|チェック/.test(raw)) return "check";
+  if (/^(circle|maru|correct|ok|o|〇|○)$/.test(raw) || /丸|正解/.test(raw)) return "circle";
+  if (/^(cross|batsu|incorrect|wrong|x|×|✕|✗)$/.test(raw) || /バツ|不正解|斜線|取り消し/.test(raw)) return "cross";
+  return "none";
+}
+
+/**
+ * 赤ペンは記録用。正誤は原則として自律比較。
+ * ×／斜線だけ不正解に確定する。〇は「先生が丸を付けた」事実であり、模範解答の代わりにしない。
+ */
+export function teacherMarkVerdict(value) {
+  const mark = normalizeTeacherMark(value);
+  if (mark === "cross") return false;
+  return null;
+}
+
+export function mergeProblemPayloads(base, extra) {
+  const head = base && typeof base === "object" && !Array.isArray(base) ? { ...base } : {};
+  const a = Array.isArray(head.problems) ? head.problems : Array.isArray(head.questions) ? head.questions : [];
+  const tail = extra && typeof extra === "object" && !Array.isArray(extra) ? extra : {};
+  const b = Array.isArray(tail.problems) ? tail.problems : Array.isArray(tail.questions) ? tail.questions : [];
+  return { ...head, ...tail, problems: dedupeExtractedProblems([...a, ...b]) };
+}
+
+export function continuationUserPrompt(lastIndex, extractedCount) {
+  const last = String(lastIndex ?? "").trim() || "不明";
+  const n = Number.isFinite(extractedCount) ? extractedCount : 0;
+  return [
+    `前回の応答は途中で切れた。すでに ${n} 問を抽出済み（最後の problem_index は ${last}）。`,
+    "画像を再走査し、それより下（または次の段）に残っている小問だけを problems に入れて返せ。",
+    "既出の問は繰り返すな。赤ペンが無い・ページ下部・右列の小問も落とすな。",
+    "各問に ground_truth / student_answer / teacher_mark / marker_coordinate / question_unit を付ける。",
+  ].join("");
+}
+
+export function normalizeProblemIndexKey(value) {
+  return String(value ?? "")
+    .normalize("NFKC")
+    .replace(/問|大問|小問|番/g, "")
+    .replace(/[()（）[\]【】.\s　]/g, "")
+    .replace(/^0+(?=\d)/, "");
+}
+
+function stemFingerprint(text) {
+  return normalizeShortText(text).slice(0, 48);
+}
+
+function boxesOverlapEnough(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length < 4 || b.length < 4) return false;
+  const [ay, ax, aY, aX] = a.map(Number);
+  const [by, bx, bY, bX] = b.map(Number);
+  if (![ay, ax, aY, aX, by, bx, bY, bX].every(Number.isFinite)) return false;
+  const iy = Math.max(ay, by);
+  const ix = Math.max(ax, bx);
+  const iY = Math.min(aY, bY);
+  const iX = Math.min(aX, bX);
+  if (iY <= iy || iX <= ix) return false;
+  const inter = (iY - iy) * (iX - ix);
+  const areaA = Math.max(1, (aY - ay) * (aX - ax));
+  const areaB = Math.max(1, (bY - by) * (bX - bx));
+  return inter / Math.min(areaA, areaB) >= 0.45;
+}
+
+function stemsLookSame(a, b) {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return a === b || a.includes(b) || b.includes(a);
+}
+
+function preferExtractedProblem(current, incoming) {
+  const curStem = String(current.question_text ?? "").trim();
+  const nextStem = String(incoming.question_text ?? "").trim();
+  if (nextStem.length > curStem.length + 8) return incoming;
+  const curMark = normalizeTeacherMark(current.teacher_mark);
+  const nextMark = normalizeTeacherMark(incoming.teacher_mark);
+  if (curMark === "none" && nextMark !== "none") return { ...current, ...incoming, teacher_mark: nextMark };
+  if (!current.student_answer && incoming.student_answer) {
+    return { ...current, student_answer: incoming.student_answer, is_blank: incoming.is_blank, answer_type: incoming.answer_type };
+  }
+  if (!current.ground_truth && incoming.ground_truth) {
+    return { ...current, ground_truth: incoming.ground_truth, correct_answer: incoming.correct_answer || incoming.ground_truth };
+  }
+  return current;
+}
+
+/** 同じ小問番号＋同じ設問の二重抽出を1件にまとめる。上から下の順を保つ */
+export function dedupeExtractedProblems(items) {
+  const list = Array.isArray(items) ? items : [];
+  const out = [];
+  for (const item of list) {
+    const key = normalizeProblemIndexKey(item?.problem_index);
+    const stem = stemFingerprint(item?.question_text);
+    const dupAt = out.findIndex((row) => {
+      const rowKey = normalizeProblemIndexKey(row.problem_index);
+      if (!key || !rowKey || key !== rowKey) return false;
+      const rowStem = stemFingerprint(row.question_text);
+      if (stemsLookSame(stem, rowStem)) return true;
+      return boxesOverlapEnough(row.bbox, item.bbox);
+    });
+    if (dupAt < 0) {
+      out.push(item);
+      continue;
+    }
+    out[dupAt] = preferExtractedProblem(out[dupAt], item);
+  }
+  return out;
+}
+
 /** 「16」「⑯」「問16」など、問題番号だけ（数式ではない） */
 export function isQuestionNumberOnly(text) {
   const value = String(text ?? "")
@@ -431,6 +581,9 @@ export function parseExtractProblems(raw) {
     const answerType = isBlank ? "none" : answerTypeHint;
     const groundTruth = String(row.ground_truth ?? row.groundTruth ?? "").trim();
     const correctAnswer = groundTruth || String(row.correct_answer ?? "").trim();
+    const teacherMark = normalizeTeacherMark(
+      row.teacher_mark ?? row.teacherMark ?? row.score_mark ?? row.grading_mark ?? row.mark,
+    );
     const topic = String(row.topic ?? row.topic_tag ?? "").trim();
     const kind =
       normalizeGradeKind(row.type) ??
@@ -443,9 +596,13 @@ export function parseExtractProblems(raw) {
       is_blank: isBlank,
       correct_answer: correctAnswer,
       ground_truth: groundTruth || correctAnswer,
+      teacher_mark: teacherMark,
       type: kind,
       topic,
       bbox: parseGeminiBBox(row.bbox),
+      marker_coordinate: parseMarkerCoordinate(
+        row.marker_coordinate ?? row.markerCoordinate ?? row.mark_coordinate,
+      ),
       visual_type: inferVisualType({
         visual_type: row.visual_type ?? row.visualType,
         question_text: questionText,
@@ -465,11 +622,12 @@ export function parseExtractProblems(raw) {
 }
 
 export function gradeExtractedProblems(extracted, subjectHint) {
-  const total = extracted.length;
-  const pageHay = extracted
-    .map((item) => [item.question_text, item.topic, item.word_bank, item.options_text, item.context_text].filter(Boolean).join(" "))
+  const unique = dedupeExtractedProblems(extracted);
+  const total = unique.length;
+  const pageHay = unique
+    .map((item) => [item.question_text, item.topic, item.word_bank, item.options_text].filter(Boolean).join(" "))
     .join(" ");
-  const problems = extracted.map((item, index) => {
+  const problems = unique.map((item, index) => {
     const options = item.options_text || item.word_bank;
     const blank = item.is_blank === true || !item.student_answer;
     const answerType = blank ? "none" : normalizeAnswerType(item.answer_type, item.student_answer);
@@ -488,23 +646,26 @@ export function gradeExtractedProblems(extracted, subjectHint) {
           })
         : answersMatchStrict(studentAnswer, ground);
     const originalBbox = coerceGeminiBBox(item.bbox, index, total);
-    const isCorrect = applyCopiedAnswerGuards(
-      {
-        ...item,
-        student_answer: studentAnswer,
-        ground_truth: ground,
-        correct_answer: ground,
-        bbox: originalBbox,
-        answer_type: answerType,
-      },
-      rawCorrect,
-      pageHay,
-    );
-    const snapped = snapBBoxToAnswerSlot(
-      originalBbox,
-      item.parent_figure_box,
-      item.sub_figure_box,
-      answerType,
+    const marked = teacherMarkVerdict(item.teacher_mark);
+    const isCorrect =
+      marked !== null
+        ? marked
+        : applyCopiedAnswerGuards(
+            {
+              ...item,
+              student_answer: studentAnswer,
+              ground_truth: ground,
+              correct_answer: ground,
+              bbox: originalBbox,
+              answer_type: answerType,
+            },
+            rawCorrect,
+            pageHay,
+          );
+    const snapped = resolveOverlayBBox(
+      { ...item, bbox: originalBbox, answer_type: answerType },
+      index,
+      total,
     );
     const problemType = problemTypeFromKind(item.type, `${item.question_text} ${item.problem_index}`);
     const expected =
@@ -516,10 +677,12 @@ export function gradeExtractedProblems(extracted, subjectHint) {
       problem_index: item.problem_index,
       question_text: item.question_text,
       bbox: snapped,
+      marker_coordinate: parseMarkerCoordinate(item.marker_coordinate),
       is_correct: isCorrect,
       student_answer: studentAnswer,
       answer_type: blank ? "none" : answerType,
       is_blank: blank,
+      teacher_mark: normalizeTeacherMark(item.teacher_mark),
       correct_answer:
         expected !== null && item.type === "math" && hasFormula ? String(expected) : ground,
       ground_truth: ground,

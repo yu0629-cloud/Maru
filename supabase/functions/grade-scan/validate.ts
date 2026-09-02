@@ -18,10 +18,14 @@ import {
   answersMatchStrict,
   applyCopiedAnswerGuards,
   canonicalizeChoiceAnswer,
+  dedupeExtractedProblems,
   gradeFromGeminiPayload,
   isQuestionNumberOnly,
   normalizeAnswerType,
-  snapBBoxToAnswerSlot,
+  normalizeTeacherMark,
+  parseMarkerCoordinate,
+  resolveOverlayBBox,
+  teacherMarkVerdict,
 } from "./hybrid-grade.ts";
 import { parseJsonPayload } from "./parse-json.mjs";
 import { resolveScanSubject } from "./subject.ts";
@@ -224,29 +228,50 @@ export function normalizeProblem(raw: unknown, index: number): GradeProblem {
   const parentFigureBox = parseUsableBox(unit.parentFigure);
   const subFigureBox = parseUsableBox(unit.subFigure);
 
+  const teacherMark = normalizeTeacherMark(
+    optionalString(obj.teacher_mark) ?? optionalString(obj.teacherMark) ?? optionalString(obj.score_mark),
+  );
+  const marked = teacherMarkVerdict(teacherMark);
   let isCorrect = asBoolean(obj.is_correct, `${path}.is_correct`);
-  if (groundTruth && !answersMatchStrict(studentAnswer, groundTruth)) {
+  if (marked !== null) {
+    isCorrect = marked;
+  } else if (groundTruth && !answersMatchStrict(studentAnswer, groundTruth)) {
     isCorrect = false;
   }
-  isCorrect = applyCopiedAnswerGuards(
+  if (marked === null) {
+    isCorrect = applyCopiedAnswerGuards(
+      {
+        question_text: questionText,
+        topic: topicTag,
+        student_answer: studentAnswer,
+        ground_truth: groundTruth || correctAnswer,
+        correct_answer: correctAnswer,
+        passage_text: unit.context || optionalString(obj.passage_text) || "",
+        word_bank: optionsTextEarly,
+        options_text: optionsTextEarly,
+        context_text: unit.context,
+        bbox,
+        parent_figure_box: parentFigureBox,
+        sub_figure_box: subFigureBox,
+        answer_type: answerType,
+      },
+      isCorrect,
+    );
+  }
+  const markerCoordinate = parseMarkerCoordinate(
+    obj.marker_coordinate ?? obj.markerCoordinate ?? obj.mark_coordinate,
+  );
+  const snappedBbox = resolveOverlayBBox(
     {
-      question_text: questionText,
-      topic: topicTag,
-      student_answer: studentAnswer,
-      ground_truth: groundTruth || correctAnswer,
-      correct_answer: correctAnswer,
-      passage_text: unit.context || optionalString(obj.passage_text) || "",
-      word_bank: optionsTextEarly,
-      options_text: optionsTextEarly,
-      context_text: unit.context,
       bbox,
+      marker_coordinate: markerCoordinate,
       parent_figure_box: parentFigureBox,
       sub_figure_box: subFigureBox,
       answer_type: answerType,
     },
-    isCorrect,
+    index,
+    1,
   );
-  const snappedBbox = snapBBoxToAnswerSlot(bbox, parentFigureBox, subFigureBox, answerType) ?? bbox;
 
   const inferredType = isProblemType(obj.problem_type)
     ? obj.problem_type
@@ -317,10 +342,12 @@ export function normalizeProblem(raw: unknown, index: number): GradeProblem {
     problem_index: problemIndex,
     question_text: questionText,
     bbox: snappedBbox,
+    marker_coordinate: markerCoordinate,
     is_correct: isCorrect,
     student_answer: studentAnswer,
     answer_type: answerType,
     is_blank: flaggedBlank || !studentAnswer,
+    teacher_mark: teacherMark,
     correct_answer: correctAnswer,
     topic_tag: topicTag,
     difficulty_level: difficulty,
@@ -345,13 +372,14 @@ export function validateGradeResult(raw: unknown): GradeResult {
     throw new GradeValidationError("problems は1件以上必要です");
   }
 
+  const uniqueRaw = dedupeExtractedProblems(obj.problems);
   const problems = fillMissingSubFigureBoxes(
-    mergeCalcBlocks(obj.problems.map((item, index) => normalizeProblem(item, index))),
+    mergeCalcBlocks(uniqueRaw.map((item, index) => normalizeProblem(item, index))),
   );
 
   let earned: number;
   let max: number;
-  if (obj.overall_score === undefined) {
+  if (obj.overall_score === undefined || uniqueRaw.length !== obj.problems.length) {
     earned = problems.filter((problem) => problem.is_correct).length;
     max = problems.length;
   } else {

@@ -7,6 +7,9 @@ export {
   placeholderBBox,
   parseGeminiBBox,
   coerceGeminiBBox,
+  parseMarkerCoordinate,
+  bboxFromMarkerCoordinate,
+  resolveOverlayBBox,
   normalizeShortText,
   parseNumberToken,
   numbersEqual,
@@ -31,6 +34,12 @@ export {
   parseExtractProblems,
   extractProblemList,
   isQuestionNumberOnly,
+  normalizeTeacherMark,
+  teacherMarkVerdict,
+  mergeProblemPayloads,
+  continuationUserPrompt,
+  normalizeProblemIndexKey,
+  dedupeExtractedProblems,
   gradeExtractedProblems,
   gradeFromGeminiPayload,
 } from "./hybrid-grade.mjs";
@@ -46,6 +55,7 @@ export type ExtractedProblem = {
   type: GradeKind;
   topic?: string;
   bbox?: [number, number, number, number] | null;
+  marker_coordinate?: [number, number] | null;
   visual_type?: "text_only" | "has_figure" | "passage_based";
   crop_box?: [number, number, number, number] | null;
   passage_text?: string;
@@ -56,5 +66,6 @@ export type ExtractedProblem = {
   word_bank?: string;
   answer_type?: "handwritten_text" | "circle_selection" | "none";
   is_blank?: boolean;
+  teacher_mark?: "circle" | "check" | "cross" | "none";
   gemini_is_correct?: boolean;
 };

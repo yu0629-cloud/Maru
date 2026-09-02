@@ -2,6 +2,7 @@ import { Pressable, Text, View } from "react-native";
 import { useEffect, useMemo, useState } from "react";
 import { CarteSubjectCards, CarteSubjectChart } from "@/src/features/carte/CarteSubjectChart";
 import { t, tSubject } from "@/src/i18n";
+import { displayProblemNumber } from "@/src/features/print/html";
 import {
   buildCarteMastery,
   groupSubjects,
@@ -95,7 +96,15 @@ function TopicCard({
         ) : (
           group.mistakes.map((item: CarteProblemRow) => (
             <View key={item.id} className="mt-3 rounded-xl bg-cream px-3 py-2">
-              <Text className="text-xs text-ink/50">{t("common.question", { label: item.problem_label ?? "" })}</Text>
+              <Text className="text-xs text-ink/50">
+                {t("common.question", {
+                  label:
+                    displayProblemNumber({
+                      problem_label: item.problem_label,
+                      question_text: item.question_text,
+                    }) || item.problem_label || "",
+                })}
+              </Text>
               <Text className="mt-0.5 font-semibold text-ink">{item.question_text || t("carte.noQuestion")}</Text>
               <Text className="mt-1 text-sm text-ink/70">{t("carte.studentAnswer", { answer: item.student_answer || t("common.none") })}</Text>
               <Text className="mt-0.5 text-sm text-ink/70">{t("carte.correctAnswer", { answer: item.correct_answer || t("common.none") })}</Text>

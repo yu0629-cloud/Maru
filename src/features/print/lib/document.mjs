@@ -16,6 +16,7 @@ import {
   formatSquareNumber,
   formatRoundNumber,
   matchLeadingQuestionNumber,
+  looksLikeProblemStemText,
 } from "./question-number.mjs";
 
 export { chooseAnswerStyle, problemsPerPage, styleToGridType, ANSWER_STYLE_LABELS, PROBLEM_TYPE_LABELS };
@@ -25,7 +26,11 @@ export {
   referencedPartTokens,
   formatSquareNumber,
   formatRoundNumber,
+  formatMajorSubLabel,
+  parseMajorSub,
+  displayProblemNumber,
   matchLeadingQuestionNumber,
+  looksLikeProblemStemText,
 } from "./question-number.mjs";
 export {
   toClipItems,
@@ -54,6 +59,15 @@ export {
   looksLikeTopParentFigure,
   looksLikeInsetCrop,
   looksLikeAnswerSlot,
+  looksLikeQuestionStem,
+  estimateFigureCaptionEnd,
+  trailingStemCutFromBandSizes,
+  leadingStemCutFromBandSizes,
+  leftStemCutFromColumnSizes,
+  leftStemMasksFromBandColumns,
+  swallowedStemMasksInCrop,
+  clipFigureToOverlappingPanel,
+  combineFigureMasks,
   looksLikeLeftStemColumn,
   clipInsetBottomBeforeAnswer,
   clipInsetLeftAfterStem,
@@ -73,7 +87,7 @@ export const A4_CONTENT_HEIGHT_MM = 273;
 /** 「右の図／左の図」を置く枠。切り抜き画像をこの枠に合わせて拡大縮小する */
 export const INSET_SLOT_OCCUPANCY = { widthPct: 32, heightMm: 48 };
 /** お直し図の切り抜き世代。PDF に書いて、古いバンドルのまま印字していないか確認する */
-export const PRINT_CROP_REV = 59;
+export const PRINT_CROP_REV = 77;
 
 const DUMMY_QUESTION = /計算\s*\(\s*1\s*\)|計算ブロック|問計算|ブロック\d*|計算ドリル|^大問\s*\d+$|^漢字\s*\d+$|^読解\s*\d+$|^理科\s*\d+$|^適性検査$|^作図$|^文章題$|^計算$|^適性$/;
 
@@ -546,8 +560,15 @@ export function flattenWorksheetItems(problems) {
           ? resolveInsetFigureBox({ ...problem, parentFigureBox: parentBox, bbox: answerBox }) ??
             subFigureBoxOf(problem)
           : null;
+      const problemBox = usableGeminiBox(problem?.bbox ?? problem?.gemini_bbox ?? problem?.geminiBbox);
       const parentPlan = planExpandedFigureCrop(parentBox || figureCropBoxOf(problem), answerBox, {
         preserveExtent: true,
+        hasQuestionStem: Boolean(
+          looksLikeProblemStemText(question) ||
+            looksLikeProblemStemText(problem?.questionText ?? problem?.question_text),
+        ),
+        problemBox,
+        answerSlot: problemBox,
       });
       const insetAnswer =
         wantsInset && !wantsTable
@@ -561,7 +582,10 @@ export function flattenWorksheetItems(problems) {
             asInset: wantsInset && !wantsTable,
           })
         : { cropGemini: null, masks: [] };
-      const parentMasks = parentSrc ? parentPlan.masks : [];
+      const parentMasks = [
+        ...(Array.isArray(problem?.figureMasks) ? problem.figureMasks : []),
+        ...(parentSrc ? parentPlan.masks : []),
+      ];
       const subMasks = subSrc ? subPlan.masks : [];
       items.push(
         toWorksheetItem(problem, question, items.length + 1, "figure", {
@@ -884,6 +908,10 @@ img {
   page-break-inside: avoid;
   break-inside: avoid;
 }
+.figure-frame {
+  position: relative;
+  display: block;
+}
 .figure-media.parent-figure {
   padding-top: 1.5mm;
 }
@@ -941,6 +969,7 @@ img {
   position: absolute;
   background: #fff;
   pointer-events: none;
+  z-index: 2;
 }
 .answer-frame {
   min-height: 20mm;
@@ -1045,8 +1074,10 @@ function figureMediaHtml(rawSrc, occupancy, masks, variant = "") {
       : "";
   const variantClass = variant ? ` ${variant}` : "";
   return `<div class="figure-media${variantClass}" ${occ}>
-    <img src="${src}" alt="" />
-    ${maskHtml}
+    <div class="figure-frame">
+      <img src="${src}" alt="" />
+      ${maskHtml}
+    </div>
   </div>`;
 }
 

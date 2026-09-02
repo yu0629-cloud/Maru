@@ -5,6 +5,7 @@ import {
   raiseCropBelowLead,
   looksLikeInsetCrop,
   looksLikeLeftStemColumn,
+  looksLikeQuestionStem,
   looksLikeTopParentFigure,
   LEAD_BAND_END,
   RIGHT_INSET_XMIN,
@@ -16,6 +17,7 @@ import {
   trimInsetNeighborEdges,
 } from "./bbox.mjs";
 import { normalizeOcrText } from "./ocr-text.mjs";
+import { looksLikeProblemStemText, matchLeadingQuestionNumber } from "./question-number.mjs";
 
 export { normalizeOcrText } from "./ocr-text.mjs";
 
@@ -80,6 +82,17 @@ export function benefitsFromParentFigure(item = {}) {
   return /下の図|次の図|右の図|上の図|図のような|図を見|図から|手順で|実験/.test(hay);
 }
 
+/**
+ * 「右の図」ではない右寄りの縦積み図（角度＋矢印＋分度器など）。
+ * 差し込み扱いすると左ラベルと上段パネルが切れる。
+ */
+function keepRightColumnParentBox(box, item = {}) {
+  const n = usableGeminiBox(box);
+  if (!n || !looksLikeInsetFigureBox(n)) return false;
+  if (needsInsetFigure(item)) return false;
+  return n[1] >= 400 && n[3] >= 760 && (n[2] - n[0] >= 180 || n[0] <= 240);
+}
+
 /** てことろうそくなど、別実験の図を取り違えないための系統 */
 export function figureFamilyOf(item = {}) {
   const hay = problemHaystack(item);
@@ -104,7 +117,9 @@ export function sameFigureFamily(a = {}, b = {}) {
 /** 親図座標が無いとき、ページ上部の共通図を仮定する */
 export function inferParentFigureBox(item = {}) {
   const explicit = usableGeminiBox(item?.parentFigureBox ?? item?.parent_figure_box);
-  if (explicit && !looksLikeInsetFigureBox(explicit)) return explicit;
+  if (explicit && (!looksLikeInsetFigureBox(explicit) || keepRightColumnParentBox(explicit, item))) {
+    return explicit;
+  }
   const crop =
     usableGeminiBox(item?.figureCropBox) ||
     usableGeminiBox(item?.crop_box) ||
@@ -156,8 +171,12 @@ export function trimParentBottomBeforeQuestion(box, item = {}) {
   const b = usableGeminiBox(box);
   if (!b || !looksLikeTopParentFigure(b)) return b;
   const stem = stemBoxOf(item);
-  if (looksLikeLeftStemColumn(stem) && stem[0] > b[0] + 70 && stem[0] < b[2] + 80) {
-    const stop = Math.max(b[0] + 140, Math.min(b[2], stem[0] - 6));
+  if (
+    (looksLikeQuestionStem(stem) || looksLikeLeftStemColumn(stem)) &&
+    stem[0] > b[0] + 70 &&
+    stem[0] < b[2] + 80
+  ) {
+    const stop = Math.max(b[0] + 140, Math.min(b[2], stem[0] - 8));
     if (stop < b[2]) return [b[0], b[1], stop, b[3]];
   }
   if (needsInsetFigure(item) && b[2] > 320 && b[2] - b[0] > 160) {
@@ -197,6 +216,11 @@ export function earliestStemBelowParent(problems, parentBox, current) {
   const key = shareKeyOf(current);
   const ctx = contextKeyOf(current);
   const parentMid = parent[0] + (parent[2] - parent[0]) * 0.28;
+  let bestNumbered = null;
+  let bestNumber = Infinity;
+  let bestNumberTop = Infinity;
+  let bestStem = null;
+  let bestStemTop = Infinity;
   let best = null;
   let bestTop = Infinity;
   const list = Array.isArray(problems) ? problems : [];
@@ -211,11 +235,25 @@ export function earliestStemBelowParent(problems, parentBox, current) {
     const top = Math.min(box[0], box[2]);
     if (top < parentMid) continue;
     if (top >= parent[2] + 260) continue;
+    const qText = String(row?.questionText ?? row?.question_text ?? row?.stem ?? "");
+    const numbered = looksLikeProblemStemText(qText) ? matchLeadingQuestionNumber(qText) : null;
+    const tokenNum = numbered ? Number.parseInt(numbered.token, 10) : NaN;
+    if (Number.isFinite(tokenNum) && (tokenNum < bestNumber || (tokenNum === bestNumber && top < bestNumberTop))) {
+      bestNumber = tokenNum;
+      bestNumberTop = top;
+      bestNumbered = box;
+    }
+    if (looksLikeQuestionStem(box) && top < bestStemTop) {
+      bestStemTop = top;
+      bestStem = box;
+    }
     if (top < bestTop) {
       bestTop = top;
       best = box;
     }
   }
+  if (bestNumbered) return bestNumbered;
+  if (bestStem) return bestStem;
   if (best) return best;
   return usableGeminiBox(current?.bbox ?? current?.gemini_bbox ?? current?.geminiBbox);
 }
@@ -450,7 +488,9 @@ export function resolveInsetFigureBox(item) {
 export function resolveParentFigureBox(item) {
   const explicitSub = usableGeminiBox(item?.subFigureBox ?? item?.sub_figure_box);
   const rawExplicit = usableGeminiBox(item?.parentFigureBox ?? item?.parent_figure_box);
-  const explicit = rawExplicit && !looksLikeInsetFigureBox(rawExplicit) ? rawExplicit : null;
+  const explicit = rawExplicit && (!looksLikeInsetFigureBox(rawExplicit) || keepRightColumnParentBox(rawExplicit, item))
+    ? rawExplicit
+    : null;
   const crop =
     usableGeminiBox(item?.figureCropBox) ||
     usableGeminiBox(item?.crop_box) ||
@@ -498,7 +538,7 @@ export function enrichPrintFigureBoxes(problems) {
       const donorKey = family && family !== "mixed" ? `${key}::${family}` : `${key}::any`;
       const explicit = usableGeminiBox(row.parentFigureBox ?? row.parent_figure_box);
       const crop = usableGeminiBox(row.figureCropBox) || usableGeminiBox(row.crop_box);
-      if (explicit && !looksLikeInsetFigureBox(explicit)) {
+      if (explicit && (!looksLikeInsetFigureBox(explicit) || keepRightColumnParentBox(explicit, row))) {
         parentDonors.set(
           donorKey,
           parentExplicit.get(donorKey)

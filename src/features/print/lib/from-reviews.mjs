@@ -108,6 +108,8 @@ export function printProblemFromReview(item) {
     blankedPath: expired ? "" : item?.blankedPath || "",
     croppedPath: expired ? "" : item?.croppedPath || "",
     originalPath: expired ? "" : item?.originalPath || "",
+    scanId: item?.scanId ?? item?.scan_id ?? "",
+    scan_id: item?.scanId ?? item?.scan_id ?? "",
     localUri: expired ? "" : originalLocal,
     imageSrc: expired ? "" : item?.blankedImageSrc || item?.croppedImageSrc || item?.imageSrc || "",
     blankedImageSrc: expired ? "" : item?.blankedImageSrc || "",
@@ -175,7 +177,7 @@ function partTokenOf(problem) {
     problemLabel: problem?.problem_label,
     problemIndex: problem?.problemIndex ?? problem?.problem_index,
   });
-  return String(resolved.token || questionNumberToken(problem) || "").trim();
+  return String(resolved.sub || resolved.token || questionNumberToken(problem) || "").trim();
 }
 
 function samePrintUnit(a, b) {
@@ -319,6 +321,13 @@ function toAsciiDigits(value) {
 }
 
 function questionNumberToken(problem) {
+  const resolved = resolveQuestionNumber({
+    questionText: problem?.questionText ?? problem?.question_text,
+    label: problem?.label ?? problem?.problem_label ?? problem?.problemIndex ?? problem?.problem_index,
+    problemLabel: problem?.problem_label,
+    problemIndex: problem?.problemIndex ?? problem?.problem_index,
+  });
+  if (resolved.token) return resolved.token;
   const stemHit = matchLeadingQuestionNumber(problem?.questionText || problem?.question_text || "");
   if (stemHit?.token) return stemHit.token;
   const raw = String(
@@ -328,13 +337,6 @@ function questionNumberToken(problem) {
     .replace(/\s+/g, "");
   const pair = raw.match(/([0-9０-９]{1,2})[-−ー~～][\(（]?([0-9０-９]{1,2})/);
   if (pair) return `${toAsciiDigits(pair[1])}-${toAsciiDigits(pair[2])}`;
-  const resolved = resolveQuestionNumber({
-    questionText: problem?.questionText ?? problem?.question_text,
-    label: problem?.label ?? problem?.problem_label ?? problem?.problemIndex ?? problem?.problem_index,
-    problemLabel: problem?.problem_label,
-    problemIndex: problem?.problemIndex ?? problem?.problem_index,
-  });
-  if (resolved.token) return resolved.token;
   const match = raw.match(/(?:問)?[\(（\[]?([0-9０-９]{1,2})[\)）\]]?/);
   if (!match) return "";
   return toAsciiDigits(match[1]);

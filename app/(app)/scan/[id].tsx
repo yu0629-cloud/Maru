@@ -19,6 +19,7 @@ import { hydrateScanById } from "@/src/features/storage/hydrate-scans";
 import { useScanPhotoUri } from "@/src/features/storage/useScanPhotoUri";
 import { useCurrentBatchJobs } from "@/src/stores/scanQueueStore";
 import { t, tMistake } from "@/src/i18n";
+import { displayProblemNumber } from "@/src/features/print/html";
 import { useGradeResultLabel } from "@/src/components/GradeMark";
 import { useScanStore, type ScanRecord } from "@/src/stores/scanStore";
 
@@ -229,7 +230,15 @@ function ScanDetailBody({
           return (
             <View key={problem.id} className="mt-4 rounded-2xl bg-white p-4">
               <View className="flex-row items-center justify-between">
-                <Text className="font-bold text-ink">{t("common.question", { label: problem.problem_label })}</Text>
+                <Text className="font-bold text-ink">
+                  {t("common.question", {
+                    label:
+                      displayProblemNumber({
+                        problem_label: problem.problem_label,
+                        question_text: problem.question_text,
+                      }) || problem.problem_label,
+                  })}
+                </Text>
                 <Pressable
                   onPress={() => flip(problem.id)}
                   className={`rounded-full px-3 py-1 ${problem.is_correct ? "bg-emerald-600" : "bg-maru-500"}`}

@@ -101,6 +101,12 @@ const {
   answersMatchStrict,
   canonicalizeChoiceAnswer,
   snapBBoxToAnswerSlot,
+  normalizeTeacherMark,
+  dedupeExtractedProblems,
+  parseMarkerCoordinate,
+  bboxFromMarkerCoordinate,
+  mergeProblemPayloads,
+  continuationUserPrompt,
 } = await import(
   pathToFileURL(join(root, "supabase/functions/grade-scan/hybrid-grade.mjs")).href,
 );
@@ -223,6 +229,29 @@ const leverOk = gradeExtractedProblems([
   },
 ]);
 assert.equal(leverOk.problems[0].is_correct, true);
+const mixedPage = gradeExtractedProblems([
+  {
+    problem_index: "(1)",
+    question_text: "アのろうそくの火はどうなりますか。次の①〜③から選び、番号を書きましょう。",
+    options_text: "① すぐ消える ② しばらく燃えて消える ③ 燃え続ける",
+    student_answer: "2",
+    correct_answer: "2",
+    ground_truth: "2",
+    type: "text",
+    bbox: [100, 100, 200, 400],
+  },
+  {
+    problem_index: "(2)",
+    question_text: "火が消えずに燃え続けるものを、次のア〜エからすべて選びなさい。",
+    student_answer: "ウ",
+    correct_answer: "ウ",
+    ground_truth: "ウ",
+    type: "text",
+    bbox: [300, 100, 400, 400],
+  },
+]);
+assert.equal(mixedPage.problems[0].is_correct, true);
+assert.equal(mixedPage.problems[1].is_correct, true);
 const protractorOk = gradeExtractedProblems([
   {
     problem_index: "④",
@@ -386,6 +415,100 @@ assert.equal(blankSlot.problems[0].student_answer, "");
 assert.equal(blankSlot.problems[0].is_correct, false);
 pass("手書き解答欄以外の印刷ラベル・選択肢本文は答案にしない");
 
+assert.equal(normalizeTeacherMark("〇"), "circle");
+assert.equal(normalizeTeacherMark("レ点"), "check");
+assert.equal(normalizeTeacherMark("×"), "cross");
+const redCircleGraded = gradeExtractedProblems([
+  {
+    problem_index: "(3)",
+    question_text: "ろうそくの火はどうなりますか。次の①〜③から選び、番号を書きましょう。",
+    options_text: "① すぐ消える ② しばらく燃えて消える ③ 燃え続ける",
+    student_answer: "1",
+    correct_answer: "2",
+    ground_truth: "2",
+    type: "text",
+    teacher_mark: "circle",
+  },
+]);
+assert.equal(redCircleGraded.problems[0].is_correct, false);
+const redCrossGraded = gradeExtractedProblems([
+  {
+    problem_index: "(1)",
+    question_text: "次の①〜③から選びなさい。",
+    student_answer: "2",
+    correct_answer: "2",
+    ground_truth: "2",
+    type: "text",
+    teacher_mark: "cross",
+  },
+]);
+assert.equal(redCrossGraded.problems[0].is_correct, false);
+const unmarkedAir = gradeExtractedProblems([
+  {
+    problem_index: "(5)",
+    question_text: "集気びんの中に残っているものは何ですか。",
+    student_answer: "空気",
+    correct_answer: "空気",
+    ground_truth: "空気",
+    type: "text",
+    teacher_mark: "none",
+  },
+]);
+assert.equal(unmarkedAir.problems[0].is_correct, true);
+const dupedQ1 = gradeExtractedProblems([
+  {
+    problem_index: "問1",
+    question_text: "(1) 右の図のように、火のついたろうそくを入れるとどうなりますか。",
+    student_answer: "2",
+    correct_answer: "2",
+    ground_truth: "2",
+    type: "text",
+    teacher_mark: "cross",
+    bbox: [400, 80, 460, 220],
+  },
+  {
+    problem_index: "1",
+    question_text: "(1) 右の図のように、火のついたろうそくを入れるとどうなりますか。",
+    student_answer: "2",
+    correct_answer: "2",
+    ground_truth: "2",
+    type: "text",
+    teacher_mark: "cross",
+    bbox: [402, 82, 458, 218],
+  },
+]);
+assert.equal(dupedQ1.problems.length, 1);
+assert.equal(dupedQ1.overall_score.max, 1);
+assert.equal(dedupeExtractedProblems([
+  { problem_index: "問1", question_text: "(1) 火はどうなりますか。", student_answer: "2" },
+  { problem_index: "(1)", question_text: "(1) 火はどうなりますか。", student_answer: "2" },
+]).length, 1);
+assert.deepEqual(parseMarkerCoordinate([430, 180]), [430, 180]);
+assert.equal(parseMarkerCoordinate([1200, 10]), null);
+const markedOverlay = gradeExtractedProblems([
+  {
+    problem_index: "(1)",
+    question_text: "次の①〜③から選び、番号を書きましょう。",
+    student_answer: "2",
+    correct_answer: "2",
+    ground_truth: "2",
+    type: "text",
+    bbox: [80, 60, 260, 940],
+    marker_coordinate: [430, 180],
+  },
+]);
+assert.deepEqual(markedOverlay.problems[0].bbox, bboxFromMarkerCoordinate([430, 180]));
+assert.deepEqual(markedOverlay.problems[0].marker_coordinate, [430, 180]);
+assert.equal(normalizeTeacherMark("斜線"), "cross");
+const mergedPages = mergeProblemPayloads(
+  { subject: "science", problems: [{ problem_index: "(1)", question_text: "アの火", student_answer: "2" }] },
+  { problems: [{ problem_index: "(4)", question_text: "ウのけむり", student_answer: "2" }, { problem_index: "(5)", question_text: "調べること", student_answer: "空気" }] },
+);
+assert.equal(mergedPages.problems.length, 3);
+assert.equal(mergedPages.problems[2].problem_index, "(5)");
+assert.match(continuationUserPrompt("(3)", 3), /すでに 3 問/);
+pass("赤ペン〇は正解の根拠にしない。同一小問の二重抽出は1件にまとめる。続き抽出をマージできる");
+
 const aliasExtracted = parseExtractProblems({
   questions: [
     {
@@ -445,6 +568,9 @@ assert.match(schemaBlock, /enum: \["math", "text"\]/);
 assert.match(schemaBlock, /bbox/);
 assert.match(schemaBlock, /ground_truth/);
 assert.match(schemaBlock, /"is_correct"/);
+assert.match(schemaBlock, /"teacher_mark"/);
+assert.match(schemaBlock, /enum: \["circle", "check", "cross", "none"\]/);
+assert.match(schemaBlock, /"marker_coordinate"/);
 assert.match(schemaBlock, /visual_type/);
 assert.match(schemaBlock, /has_figure/);
 assert.match(schemaBlock, /crop_box/);
@@ -470,8 +596,10 @@ assert.doesNotMatch(schemaBlock, /needs_inpaint/);
 assert.doesNotMatch(schemaBlock, /problem_type/);
 assert.doesNotMatch(schemaBlock, /parent_coaching_tip/);
 assert.match(schemaBlock, /question_text/);
-assert.match(geminiSrc, /GEMINI_MAX_OUTPUT_TOKENS = 2048/);
-assert.match(geminiSrc, /GEMINI_FETCH_TIMEOUT_MS = 15_000/);
+assert.match(geminiSrc, /GEMINI_MAX_OUTPUT_TOKENS = 8192/);
+assert.match(geminiSrc, /GEMINI_FETCH_TIMEOUT_MS = 25_000/);
+assert.match(geminiSrc, /grade-continue/);
+assert.match(geminiSrc, /MAX_TOKENS/);
 assert.match(geminiSrc, /thinkingConfigForModel/);
 assert.match(geminiSrc, /thinkingLevel: "minimal"/);
 assert.match(geminiSrc, /thinkingBudget: 0/);
@@ -486,13 +614,28 @@ assert.doesNotMatch(geminiSrc, /x-goog-api-key/);
 pass("Gemini 呼び出しが REST 直叩き・既定は 3.5 flash-lite");
 
 const promptSrc = readFileSync(join(root, "supabase/functions/grade-scan/prompt.ts"), "utf8");
-assert.match(promptSrc, /problem_index, question_text, ground_truth, student_answer, answer_type, is_blank, is_correct, correct_answer, type, topic, bbox, visual_type, crop_box, question_unit/);
+assert.match(promptSrc, /problem_index, question_text, ground_truth, student_answer, answer_type, is_blank, teacher_mark, is_correct, correct_answer, type, topic, bbox, marker_coordinate, visual_type, crop_box, question_unit/);
+assert.match(promptSrc, /teacher_mark/);
+assert.match(promptSrc, /赤ペン/);
+assert.match(promptSrc, /2回以上含めない/);
+assert.match(promptSrc, /marker_coordinate/);
+assert.match(promptSrc, /全問走査/);
+assert.match(promptSrc, /最初の2〜3問で止めない/);
+assert.match(promptSrc, /赤丸が付いていても/);
+assert.match(promptSrc, /Step 4/);
 assert.match(promptSrc, /has_figure/);
 assert.match(promptSrc, /crop_box/);
 assert.match(promptSrc, /question_unit/);
 assert.match(promptSrc, /context_text/);
 assert.match(promptSrc, /options_text/);
 assert.match(promptSrc, /ground_truth/);
+assert.match(promptSrc, /【4段階の思考プロセス/);
+assert.match(promptSrc, /満点解答/);
+assert.match(promptSrc, /甘口採点は禁止/);
+assert.match(promptSrc, /子どもの手書き解答を一旦完全に無視/);
+assert.match(promptSrc, /直感で答えを決めず/);
+assert.match(promptSrc, /1文字でも異なれば/);
+assert.match(promptSrc, /プリントの教えを上書きするな|決めつけるな/);
 assert.match(promptSrc, /Step 1/);
 assert.match(promptSrc, /目盛り/);
 assert.match(promptSrc, /語群/);

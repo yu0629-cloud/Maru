@@ -38,13 +38,25 @@ const {
   planExpandedFigureCrop,
   clipFigureBottomBeforeBelow,
   looksLikeAnswerSlot,
+  looksLikeQuestionStem,
+  estimateFigureCaptionEnd,
+  trailingStemCutFromBandSizes,
+  leadingStemCutFromBandSizes,
+  leftStemCutFromColumnSizes,
+  leftStemMasksFromBandColumns,
+  swallowedStemMasksInCrop,
+  clipFigureToOverlappingPanel,
   looksLikeLeftStemColumn,
+  looksLikeProblemStemText,
   clipInsetBottomBeforeAnswer,
   clipInsetLeftAfterStem,
   stripRepeatedLead,
   acceptFreshPrintFigure,
   PRINT_CROP_REV,
 } = await import(pathToFileURL(printLib).href);
+const { earliestStemBelowParent } = await import(
+  pathToFileURL(join(root, "src/features/print/lib/figure-boxes.mjs")).href
+);
 const { applyReviewResult, isolateLeeches, selectDailyReviews } = await import(
   pathToFileURL(reviewLib).href
 );
@@ -138,7 +150,7 @@ const thinHtml = buildPrintHtml({
   dateLabel: "2026年8月27日",
   problems: thinHtmlProblems,
 });
-assert.match(thinHtml, /\(2\)/);
+assert.match(thinHtml, /②/);
 assert.match(thinHtml, /answer-box/);
 assert.match(thinHtml, /5 \+ 4/);
 assert.doesNotMatch(thinHtml, /\(1\)\(2\)/);
@@ -296,7 +308,7 @@ assert.equal(looksLikeMath("3"), false);
 assert.equal(looksLikeMath("0 + 7 ="), true);
 const stems = flattenWorksheetItems(fromNumberOnly);
 assert.match(stems[0].stem, /0 \+ 7/);
-assert.equal(stems[0].numberLabel, "(3)");
+assert.equal(stems[0].numberLabel, "③");
 assert.equal(stems[0].numberStyle, "round");
 pass("問番号ではなく問題文・数式を復習プリントに出す");
 
@@ -305,21 +317,23 @@ const {
   formatSquareNumber,
   formatRoundNumber,
 } = await import(pathToFileURL(join(root, "src/features/print/lib/question-number.mjs")).href);
-assert.equal(formatSquareNumber("1"), "[ 1 ]");
-assert.equal(formatRoundNumber("3"), "(3)");
-assert.equal(resolveQuestionNumber({ questionText: "① 支点はどれですか" }).label, "(1)");
-assert.equal(resolveQuestionNumber({ questionText: "【2】次の問いに答えなさい" }).label, "[ 2 ]");
-assert.equal(resolveQuestionNumber({ questionText: "■3 実験について" }).label, "[ 3 ]");
-assert.equal(resolveQuestionNumber({ questionText: "[4] 正しいものを選べ" }).label, "[ 4 ]");
-assert.equal(resolveQuestionNumber({ questionText: "1⃣ 左のうで" }).label, "[ 1 ]");
+assert.equal(formatSquareNumber("1"), "1⃣");
+assert.equal(formatRoundNumber("3"), "③");
+assert.equal(resolveQuestionNumber({ questionText: "① 支点はどれですか" }).label, "①");
+assert.equal(resolveQuestionNumber({ questionText: "【2】次の問いに答えなさい" }).label, "2⃣");
+assert.equal(resolveQuestionNumber({ questionText: "■3 実験について" }).label, "3⃣");
+assert.equal(resolveQuestionNumber({ questionText: "[4] 正しいものを選べ" }).label, "4⃣");
+assert.equal(resolveQuestionNumber({ questionText: "1⃣ 左のうで" }).label, "1⃣");
 assert.equal(resolveQuestionNumber({ questionText: "(a) 記号を書きなさい" }).label, "(a)");
-assert.equal(resolveQuestionNumber({ questionText: "2. おもりの重さ" }).label, "(2)");
-assert.equal(resolveQuestionNumber({ label: "大問1" }).label, "[ 1 ]");
-assert.equal(resolveQuestionNumber({ label: "大問1 (2)" }).label, "(2)");
+assert.equal(resolveQuestionNumber({ questionText: "2. おもりの重さ" }).label, "②");
+assert.equal(resolveQuestionNumber({ label: "大問1" }).label, "1⃣");
+assert.equal(resolveQuestionNumber({ label: "大問1 (2)" }).label, "1⃣②");
+assert.equal(resolveQuestionNumber({ label: "大問2", questionText: "① 次の角度は何度ですか" }).label, "2⃣①");
+assert.equal(resolveQuestionNumber({ label: "2-(1)" }).label, "2⃣①");
 const followUp = resolveQuestionNumber({
   questionText: "(2) (1)の結果から、どのようなことがわかりますか。次の①〜③から選び、番号を書きましょう。",
 });
-assert.equal(followUp.label, "(2)");
+assert.equal(followUp.label, "②");
 assert.match(followUp.body, /^\(1\)の結果から/);
 const { referencedPartTokens, stripLeadingQuestionNumber } = await import(
   pathToFileURL(join(root, "src/features/print/lib/question-number.mjs")).href,
@@ -338,7 +352,7 @@ const numberedStem = flattenWorksheetItems([
     parentCoachingTip: "",
   },
 ]);
-assert.equal(numberedStem[0].numberLabel, "(3)");
+assert.equal(numberedStem[0].numberLabel, "③");
 assert.equal(numberedStem[0].numberStyle, "round");
 assert.doesNotMatch(numberedStem[0].stem, /^\s*\(3\)/);
 const numberedHtml = buildPrintHtml({
@@ -358,7 +372,7 @@ const numberedHtml = buildPrintHtml({
     },
   ],
 });
-assert.match(numberedHtml, /class="num">\(3\)</);
+assert.match(numberedHtml, /class="num">③</);
 assert.doesNotMatch(numberedHtml, /\(1\)\s*\(3\)/);
 assert.doesNotMatch(numberedHtml, /\(1\)\(3\)/);
 const squareHtml = buildPrintHtml({
@@ -379,7 +393,7 @@ const squareHtml = buildPrintHtml({
   ],
 });
 assert.match(squareHtml, /num-square/);
-assert.match(squareHtml, /\[ 1 \]/);
+assert.match(squareHtml, /1⃣/);
 pass("設問番号を元プリント記号に応じて正規化し二重連番を出さない");
 
 const followUpPrint = collectPrintProblems({
@@ -569,8 +583,8 @@ const dailyHtml = buildPrintHtml({
 });
 assert.equal([...dailyHtml.matchAll(/class="sheet/g)].length, 1);
 assert.match(dailyHtml, /sheet single/);
-assert.match(dailyHtml, /\(5\)/);
-assert.doesNotMatch(dailyHtml, /\(6\)/);
+assert.match(dailyHtml, /⑤/);
+assert.doesNotMatch(dailyHtml, /⑥/);
 assert.doesNotMatch(dailyHtml, /height:\s*297mm/);
 const extraDaily = buildPrintHtml({
   title: "お直し",
@@ -638,7 +652,7 @@ const textHtml = buildPrintHtml({
 });
 assert.match(textHtml, /8 \+ 2/);
 assert.match(textHtml, /answer-box/);
-assert.match(textHtml, /\(1\)/);
+assert.match(textHtml, /①/);
 assert.doesNotMatch(textHtml, /<img/);
 pass("画像が無い不正解も問題番号と問題文を印字する");
 
@@ -755,6 +769,230 @@ assert.ok(swallowedStem.cropGemini);
 assert.ok(swallowedStem.cropGemini[2] <= 510);
 assert.ok(swallowedStem.cropGemini[2] < 560);
 pass("親図の下端は手順注釈まで含め、設問本文は図に残さない");
+const captionUnderFigure = planExpandedFigureCrop([160, 40, 328, 960], [700, 800, 760, 950], {
+  preserveExtent: true,
+});
+assert.ok(captionUnderFigure.cropGemini);
+assert.ok(captionUnderFigure.cropGemini[2] >= 390, "台座で切れた図も直下の説明まで伸ばす");
+assert.ok(captionUnderFigure.cropGemini[2] < 500, "遠い解答欄まで親図を伸ばさない");
+const captionThenStem = clipFigureBottomBeforeBelow(
+  expandFigureGeminiBox([160, 40, 328, 960]),
+  [160, 40, 328, 960],
+  [410, 40, 500, 900],
+  10,
+);
+assert.ok(captionThenStem);
+assert.ok(captionThenStem[2] >= 380, "図と小問のあいだの説明は図の一部");
+assert.ok(captionThenStem[2] < 410, "小問本文は図に入れない");
+const geminiKeptCaption = clipFigureBottomBeforeBelow(
+  expandFigureGeminiBox([160, 40, 400, 960]),
+  [160, 40, 400, 960],
+  [700, 800, 760, 950],
+  10,
+);
+assert.ok(geminiKeptCaption);
+assert.ok(geminiKeptCaption[2] >= 400, "Geminiが取った図下説明をクリップで戻さない");
+const ateQuestionStem = clipFigureBottomBeforeBelow(
+  expandFigureGeminiBox([160, 40, 430, 960]),
+  [160, 40, 430, 960],
+  [398, 40, 490, 920],
+  10,
+);
+assert.ok(ateQuestionStem);
+assert.ok(ateQuestionStem[2] < 398, "問題文と判定したら図から外す");
+assert.ok(ateQuestionStem[2] >= 350, "図下の説明は残す");
+const ateQuestionByAnswer = clipFigureBottomBeforeBelow(
+  expandFigureGeminiBox([160, 40, 430, 960]),
+  [160, 40, 430, 960],
+  [400, 820, 460, 960],
+  10,
+);
+assert.ok(ateQuestionByAnswer[2] < 400, "設問横の解答欄も問題文の上端として切る");
+const plannedQuestionStem = planExpandedFigureCrop([160, 40, 430, 960], [398, 40, 490, 920], {
+  preserveExtent: true,
+});
+assert.ok(plannedQuestionStem.cropGemini[2] < 398, "問題文bboxがあれば親図をそこで止める");
+const tallWithStemFlag = planExpandedFigureCrop([160, 40, 430, 960], [700, 800, 760, 950], {
+  preserveExtent: true,
+  hasQuestionStem: true,
+});
+assert.ok(tallWithStemFlag.cropGemini[2] >= 400, "図下の説明ブロックは座標では切らない");
+assert.equal(looksLikeProblemStemText("(1) この実験で変える条件は何ですか。"), true);
+assert.equal(looksLikeProblemStemText("❶ 左のうでの目盛６のところに、10gのおもりをつるす。"), false);
+assert.equal(looksLikeProblemStemText("① 支点からのきょりが2倍になる。"), false);
+const swallowedAt400 = planExpandedFigureCrop([160, 40, 400, 960], [700, 800, 760, 950], {
+  preserveExtent: true,
+  hasQuestionStem: true,
+});
+assert.ok(swallowedAt400.cropGemini[2] >= 400, "❶❷❸の説明は座標では残す");
+const captionOnlyShort = estimateFigureCaptionEnd([160, 40, 328, 960], { hasQuestionStem: true });
+assert.equal(captionOnlyShort, 328, "短い図箱は説明用に残す");
+const captionThenGapThenStem = trailingStemCutFromBandSizes([
+  2953, 3790, 2618, 3244, 2016, 512, 2760, 5026, 1815, 2298,
+]);
+assert.ok(captionThenGapThenStem != null, "説明と問題文のあいだの空きを検出する");
+assert.ok(captionThenGapThenStem >= 0.4 && captionThenGapThenStem <= 0.6, "空きの位置で切る（説明は残す）");
+const captionOnlyBands = trailingStemCutFromBandSizes([
+  3100, 2980, 2800, 2600, 2400, 2200, 900, 600, 520, 480, 470, 460,
+]);
+assert.equal(captionOnlyBands, null, "説明の下に余白だけなら切らない");
+const leadThenFigure = leadingStemCutFromBandSizes([
+  2542, 799, 619, 932, 2212, 3264, 2393, 1723, 1230, 1062,
+]);
+assert.ok(leadThenFigure != null, "図上の問題文と本体のあいだの空きを検出する");
+assert.ok(leadThenFigure >= 0.08 && leadThenFigure <= 0.22, "空きの下の図は残す");
+const choiceThenTable = leadingStemCutFromBandSizes([
+  2655, 2617, 2023, 500, 555, 1662, 555, 970, 1056, 1254,
+]);
+assert.ok(choiceThenTable != null, "表上の問題文と表本体のあいだの空きを検出する");
+assert.ok(choiceThenTable >= 0.22 && choiceThenTable <= 0.4, "空きの下の表は残す");
+const figureOnlyTop = leadingStemCutFromBandSizes([
+  3264, 2393, 2212, 2000, 1880, 1760, 1650, 1540, 1480, 1400,
+]);
+assert.equal(figureOnlyTop, null, "図本体から始まる帯は上を切らない");
+const flatDeviceTable = leadingStemCutFromBandSizes([
+  2800, 2700, 2500, 1900, 1950, 2400, 2000, 2100, 2200, 2300,
+]);
+assert.ok(flatDeviceTable != null, "端末圧縮でも表上の問題文を検出する");
+assert.ok(flatDeviceTable >= 0.22 && flatDeviceTable <= 0.45, "表本体は残す");
+const leftTextThenFigure = leftStemCutFromColumnSizes([
+  2800, 2700, 2600, 2500, 2400, 500, 520, 2200, 2800, 2700, 2600, 2500,
+]);
+assert.ok(leftTextThenFigure != null, "左の本文列と図のあいだの空きを検出する");
+assert.ok(leftTextThenFigure >= 0.3 && leftTextThenFigure <= 0.5, "空きの右の図は残す");
+const leftLabelsThenFigure = leftStemCutFromColumnSizes([
+  520, 510, 1800, 1700, 600, 550, 2600, 3000, 2900, 2800, 2700, 2600,
+]);
+assert.equal(leftLabelsThenFigure, null, "左余白の右にあるイ・ウは切らない");
+const leftSnippetThenFigure = leftStemCutFromColumnSizes([
+  2600, 2500, 2400, 500, 520, 1800, 2800, 3000, 2900, 2800, 2700, 2600,
+]);
+assert.ok(leftSnippetThenFigure != null, "左に残った問題文の切れ端も空きで切る");
+assert.ok(leftSnippetThenFigure >= 0.15 && leftSnippetThenFigure <= 0.35, "切れ端の右の図とラベルは残す");
+const leftoverThenWhite = leftStemCutFromColumnSizes([
+  2600, 2500, 2400, 500, 480, 470, 460, 450, 440, 430, 420, 410,
+]);
+assert.ok(leftoverThenWhite != null, "図の段間で右が白でも左の本文切れ端は消す");
+const bandMasks = leftStemMasksFromBandColumns(
+  [
+    [2600, 2500, 500, 520, 1800, 2800, 3000, 2900],
+    [1800, 1700, 600, 550, 2600, 3000, 2900, 2800],
+    [2600, 2480, 510, 500, 2700, 2900, 3000, 2800],
+    [900, 800, 700, 2600, 3000, 2900, 2800, 2700],
+    [2550, 2490, 520, 505, 800, 2700, 2900, 3000],
+    [700, 680, 2600, 2800, 3000, 2900, 2700, 2600],
+    [2580, 2510, 490, 510, 1900, 2800, 2950, 2880],
+    [600, 580, 2400, 2700, 2900, 3000, 2800, 2700],
+  ],
+  { sampleWidthFrac: 0.72 },
+);
+assert.ok(bandMasks.length >= 1, "帯ごとに問題文切れ端を白マスクする");
+assert.ok(bandMasks.every((mask) => mask.x === 0 && mask.width > 0.04 && mask.width <= 0.32));
+assert.ok(bandMasks.some((mask) => mask.width > 0.16), "見出し切れ端は 0.16 では消えない");
+assert.ok(bandMasks.every((mask) => mask.height > 0 && mask.y >= 0));
+const protractorLeftover = leftStemMasksFromBandColumns(
+  [
+    [794, 682, 677, 677, 679, 753, 849, 680],
+    [942, 866, 834, 762, 678, 680, 816, 805],
+    [1010, 1014, 707, 749, 769, 782, 801, 1264],
+    [909, 679, 677, 815, 730, 686, 808, 678],
+    [765, 767, 680, 700, 739, 836, 863, 821],
+    [764, 783, 680, 1005, 1104, 1079, 1089, 1198],
+    [680, 675, 724, 1066, 1034, 787, 792, 818],
+    [675, 675, 837, 1043, 878, 997, 899, 862],
+    [675, 729, 990, 973, 901, 1288, 1066, 931],
+    [711, 772, 744, 768, 749, 746, 779, 739],
+  ],
+  { sampleWidthFrac: 0.72 },
+);
+assert.ok(protractorLeftover.length >= 1, "分度器図の左に食い込んだ問題文切れ端を帯ごとに消す");
+assert.ok(protractorLeftover.every((mask) => mask.x === 0 && mask.width <= 0.32));
+assert.ok(
+  protractorLeftover.every((mask) => mask.height <= 0.22),
+  "イ・ウの高さまで縦にまとめて消さない",
+);
+const swallowed = swallowedStemMasksInCrop(
+  [180, 380, 520, 960],
+  [
+    [90, 40, 210, 430],
+    [210, 40, 330, 445],
+    [330, 40, 450, 440],
+  ],
+);
+assert.ok(swallowed.length >= 1, "問題文bboxが図に食い込んだ部分だけ白マスクする");
+assert.ok(swallowed.every((mask) => mask.x === 0 && mask.width <= 0.2));
+assert.equal(
+  swallowedStemMasksInCrop([180, 380, 520, 960], [[300, 470, 330, 510]]).length,
+  0,
+  "イ・ウの小さいラベル箱は消さない",
+);
+const wideStem = swallowedStemMasksInCrop([180, 380, 520, 960], [[90, 40, 210, 900]]);
+assert.equal(wideStem.length, 0, "全幅の問題文bboxでイ・ウまで消さない");
+const gridFig = [400, 560, 720, 920];
+const panelTwo = clipFigureToOverlappingPanel(gridFig, [430, 700, 510, 860]);
+assert.ok(panelTwo);
+assert.ok(panelTwo[2] - panelTwo[0] < 220, "2×2の隣パネルまで巻き込まない");
+assert.ok(panelTwo[2] < 640, "下の④を残さない");
+const answerSliverClip = clipFigureToOverlappingPanel(gridFig, [500, 780, 545, 900]);
+assert.ok(answerSliverClip);
+assert.ok(answerSliverClip[2] - answerSliverClip[0] >= 140, "解答欄でも②の角度図を残す");
+assert.ok(answerSliverClip[0] <= 430, "手書きの上の図まで戻す");
+assert.ok(answerSliverClip[2] < 640, "解答欄クリップで下の④を残さない");
+const stackedKeep = clipFigureToOverlappingPanel([118, 400, 500, 960], [540, 40, 620, 400]);
+assert.deepEqual(stackedKeep, [118, 400, 500, 960], "縦積みの説明図は小問bboxで上段を落とさない");
+const handMask = figureAnswerMasks([400, 560, 700, 920], [430, 700, 510, 860], { preserveExtent: true });
+assert.ok(handMask.masks.length >= 1, "図の横の手書き解答を白マスクする");
+assert.ok(handMask.masks[0].x >= 0.35, "図本体は残して右側の手書きだけ消す");
+const answerOnlyCrop = planExpandedFigureCrop([500, 780, 545, 900], [500, 780, 545, 900], {
+  preserveExtent: true,
+  problemBox: [500, 780, 545, 900],
+  answerSlot: [500, 780, 545, 900],
+});
+assert.ok(answerOnlyCrop.cropGemini);
+assert.ok(answerOnlyCrop.cropGemini[2] - answerOnlyCrop.cropGemini[0] >= 150, "解答欄だけの箱でも上の角度図を残す");
+assert.ok(answerOnlyCrop.cropGemini[0] <= 420, "手書きの上の図まで戻す");
+assert.ok(answerOnlyCrop.cropGemini[2] <= 580, "下の④パネルまで伸ばさない");
+assert.ok(answerOnlyCrop.cropGemini[1] <= 700, "図は手書きの左にある");
+assert.ok(answerOnlyCrop.cropGemini[1] >= 560, "左の①まで取らない");
+const answerOnlyMasks = figureAnswerMasks(answerOnlyCrop.cropGemini, [500, 780, 545, 900], {
+  preserveExtent: true,
+});
+assert.ok(answerOnlyMasks.masks.length >= 1, "図を残したまま手書き15は右マスク");
+assert.ok(answerOnlyMasks.masks[0].x >= 0.35, "角度図本体は消さない");
+const midFalseStem = clipFigureBottomBeforeBelow(
+  expandFigureGeminiBox([160, 40, 400, 960]),
+  [160, 40, 400, 960],
+  [250, 40, 320, 900],
+  10,
+);
+assert.ok(midFalseStem[2] >= 390, "図の中腹の箱では説明を切らない");
+const lowerTrueStem = clipFigureBottomBeforeBelow(
+  expandFigureGeminiBox([160, 40, 400, 960]),
+  [160, 40, 400, 960],
+  [388, 40, 470, 920],
+  10,
+);
+assert.ok(lowerTrueStem[2] < 388, "下側の問題文だけ外す");
+assert.ok(lowerTrueStem[2] >= 350, "その上の図の説明は残す");
+const firstQuestion = earliestStemBelowParent(
+  [
+    {
+      originalPath: "scans/page.jpg",
+      questionText: "(3) 実験の結果を表にまとめると",
+      bbox: [700, 800, 760, 950],
+    },
+    {
+      originalPath: "scans/page.jpg",
+      questionText: "(1) この実験で変える条件は何ですか。",
+      bbox: [390, 40, 470, 900],
+    },
+  ],
+  [160, 40, 400, 960],
+  { originalPath: "scans/page.jpg", questionText: "(3) 実験の結果を表にまとめると" },
+);
+assert.ok(firstQuestion);
+assert.ok(firstQuestion[0] <= 390, "同じ紙の先頭小問を問題文として使う");
+pass("図下の説明は図の一部として残す");
 const paddedRight = expandFigureGeminiBox([100, 50, 500, 800]);
 assert.ok(paddedRight);
 assert.ok(paddedRight[3] >= 810);
@@ -954,10 +1192,34 @@ const figureMasked = buildPrintHtml({
   ],
 });
 assert.match(figureMasked, /figure-mask/);
+assert.match(figureMasked, /figure-frame/);
 assert.match(figureMasked, /すべて選び/);
 assert.match(figureMasked, /てこが水平につり合う/);
 assert.match(figureMasked, /支点からのきょり/);
 assert.match(figureMasked, /answer-box/);
+const leftoverMasked = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月28日",
+  problems: [
+    {
+      id: "angle",
+      label: "(1)",
+      topicTag: "角度",
+      visualType: "has_figure",
+      problemType: "math_geometry_graph",
+      figureImageSrc: FIGURE_PNG,
+      figureCropBox: [180, 380, 520, 960],
+      figureMasks: [{ x: 0, y: 0.12, width: 0.22, height: 0.1 }],
+      printFigureRev: PRINT_CROP_REV,
+      questionText: "(4) あの角度は、( )です。",
+      isCorrect: false,
+      correctAnswer: "50",
+      parentCoachingTip: "",
+    },
+  ],
+});
+assert.match(leftoverMasked, /left:0%;top:12%;width:22%;height:10%/);
 const figureFallback = buildPrintHtml({
   title: "お直し",
   childName: "はると",
@@ -1040,8 +1302,8 @@ const groupedProblems = [
 const groupedItems = flattenWorksheetItems(groupedProblems);
 assert.equal(groupedItems.length, 1);
 assert.equal(groupedItems[0].parts.length, 2);
-assert.equal(groupedItems[0].parts[0].numberLabel, "(1)");
-assert.equal(groupedItems[0].parts[1].numberLabel, "(2)");
+assert.equal(groupedItems[0].parts[0].numberLabel, "①");
+assert.equal(groupedItems[0].parts[1].numberLabel, "②");
 assert.match(groupedItems[0].parts[0].stem, /何時何分ですか/);
 assert.match(groupedItems[0].parts[1].stem, /あと何分で4時ですか/);
 const dupProblems = [
@@ -1541,6 +1803,15 @@ assert.deepEqual(
 assert.deepEqual(raiseCropBelowLead(shortTrimmed), shortTrimmed, "二重に切らない");
 // 実機ログ 2026-08-31: parentBox [138,155,322,965] → originY=154 のままリードが残った
 assert.deepEqual(raiseCropBelowLead([138, 155, 322, 965]), [148, 155, 322, 965]);
+assert.deepEqual(
+  raiseCropBelowLead([80, 380, 500, 960]),
+  [80, 380, 500, 960],
+  "右カラムの縦積み図の上段はリードとして切らない",
+);
+const protractorOnly = expandFigureGeminiBox([320, 420, 500, 920]);
+assert.ok(protractorOnly[0] <= 180, "下段だけ取れた右カラム図は上段・矢印まで戻す");
+assert.ok(protractorOnly[0] >= 118, "ページ先頭の見出しまでは戻さない");
+assert.ok(protractorOnly[2] >= 490, "下段の分度器は残す");
 const parentJars = expandFigureGeminiBox([148, 155, 322, 965]);
 assert.ok(parentJars);
 assert.ok(parentJars[0] <= 148, "親図のふた・ラベルを切らない");
@@ -1551,6 +1822,9 @@ assert.ok(tightParentBody[0] < 180, "Geminiが図本体だけでも上ラベル�
 assert.ok(tightParentBody[0] >= 155, "リード段落までは戻さない");
 assert.ok(parentJars[1] <= 36, "左の「底のない集気びん」ラベル");
 assert.ok(parentJars[2] >= 350, "集気びんのねん土の底");
+const tightParentLabels = expandFigureGeminiBox([148, 220, 322, 760]);
+assert.ok(tightParentLabels[1] <= 36, "Geminiが左ラベルを外しても上段図の注釈は残す");
+assert.ok(tightParentLabels[3] >= 750, "上段図の右キャプションは残す");
 const parentKeptBesideInset = prepareParentFigureBox(
   [148, 155, 322, 965],
   [332, 683, 508, 930],
@@ -1607,6 +1881,9 @@ const shortPacked = expandFigureGeminiBox([348, 652, 514, 940], undefined, { asI
 assert.ok(shortPacked[2] >= 530, "台座が欠けた差し込みは下を戻す");
 assert.equal(looksLikeAnswerSlot([560, 820, 620, 960]), true);
 assert.equal(looksLikeAnswerSlot([340, 40, 620, 640]), false, "設問本文全体は解答欄ではない");
+assert.equal(looksLikeQuestionStem([398, 40, 490, 920]), true, "(1)本文は問題文");
+assert.equal(looksLikeQuestionStem([500, 40, 700, 960]), false, "下の表は問題文ではない");
+assert.equal(looksLikeQuestionStem([400, 820, 460, 960]), false, "右の解答欄だけは問題文ではない");
 const insetBeforeAnswer = planExpandedFigureCrop([332, 683, 508, 930], [560, 820, 620, 960], {
   preserveExtent: true,
   asInset: true,
@@ -1642,6 +1919,24 @@ const socialRightInset = planExpandedFigureCrop([360, 580, 530, 940], [350, 40, 
 assert.ok(socialRightInset.cropGemini[1] >= 560, "資料図の左に本文切れ端を残さない");
 assert.ok(socialRightInset.cropGemini[3] >= 900, "資料図の右端はページ余白側を詰めない");
 assert.ok(socialRightInset.cropGemini[0] <= 360, "資料図の上は維持する");
+const stackedRightParent = expandFigureGeminiBox([118, 662, 478, 972]);
+assert.ok(stackedRightParent[0] <= 130, "右寄りの親図の上段（角度）を切らない");
+assert.ok(stackedRightParent[1] <= 420, "分度器の左のイ・ウラベルを 630 固定で切らない");
+assert.ok(stackedRightParent[1] >= 360, "左の設問本文列までは広げない");
+assert.ok(stackedRightParent[2] >= 470, "矢印の下の分度器まで残す");
+const stackedRightPlan = planExpandedFigureCrop([118, 662, 478, 972], [200, 40, 400, 500], {
+  preserveExtent: true,
+});
+assert.ok(stackedRightPlan.cropGemini[0] <= 130, "差し込み扱いで上段を落とさない");
+assert.ok(stackedRightPlan.cropGemini[1] <= 420, "親図の左ラベルを本文クリップで落とさない");
+const geoParentKept = resolveParentFigureBox({
+  questionText: "右の㋐の角度をはかります。( )にあてはまる言葉を [ ] から選びましょう。",
+  parentFigureBox: [118, 662, 478, 972],
+  crop_box: [118, 662, 478, 972],
+});
+assert.ok(geoParentKept);
+assert.ok(geoParentKept[0] <= 130, "右の図ではない右カラム図は親図として残す");
+assert.ok(geoParentKept[1] <= 670);
 const leftPageInset = planExpandedFigureCrop([180, 50, 460, 360], [180, 400, 520, 920], {
   preserveExtent: true,
   asInset: true,
@@ -2195,7 +2490,11 @@ assert.match(readFileSync(join(root, "src/features/print/service.ts"), "utf8"), 
 assert.match(readFileSync(join(root, "src/features/print/service.ts"), "utf8"), /isFullPageScanSource/);
 assert.match(readFileSync(join(root, "src/features/print/lib/from-reviews.mjs"), "utf8"), /採点時の切り抜き JPEG は印字に使わない/);
 const scanImageSrc = readFileSync(join(root, "src/lib/files/scan-image.ts"), "utf8");
-assert.match(scanImageSrc, /FIGURE_CACHE_VERSION = 59/);
+assert.match(scanImageSrc, /FIGURE_CACHE_VERSION = 77/);
+assert.match(scanImageSrc, /cropPaperFromPhoto/);
+assert.match(scanImageSrc, /remapGeminiBoxToPaper/);
+assert.match(scanImageSrc, /figureCacheToken/);
+assert.match(readFileSync(join(root, "src/features/print/lib/document.mjs"), "utf8"), /PRINT_CROP_REV = 77/);
 assert.match(readFileSync(join(root, "src/features/print/lib/document.mjs"), "utf8"), /acceptFreshPrintFigure/);
 assert.match(readFileSync(join(root, "src/features/print/lib/document.mjs"), "utf8"), /hasRecropSource/);
 assert.match(readFileSync(join(root, "src/features/print/service.ts"), "utf8"), /printFigureRev/);
@@ -2207,6 +2506,14 @@ assert.match(scanImageSrc, /source is not a full page scan/);
 assert.match(scanImageSrc, /expandFigureGeminiBox/);
 assert.match(scanImageSrc, /planExpandedFigureCrop/);
 assert.match(scanImageSrc, /cropFigureToBase64/);
+assert.match(scanImageSrc, /asTable \? await trimLeadingSwallowedStem/);
+assert.match(scanImageSrc, /detectLeftStemMasks/);
+assert.match(scanImageSrc, /leftStemMasksFromBandColumns/);
+assert.match(scanImageSrc, /swallowedStemMasksInCrop/);
+assert.match(scanImageSrc, /answerSlot/);
+assert.match(scanImageSrc, /figureAnswerMasks/);
+assert.match(scanImageSrc, /stemBoxes/);
+assert.match(readFileSync(join(root, "src/features/print/service.ts"), "utf8"), /stemBoxesOnSameScan/);
 assert.match(scanImageSrc, /expanded-preserve|expanded-table/);
 assert.match(scanImageSrc, /preserveExtent:\s*true/);
 assert.match(scanImageSrc, /asTable/);
@@ -2215,6 +2522,9 @@ assert.match(readFileSync(join(root, "src/features/print/lib/bbox.mjs"), "utf8")
 assert.match(readFileSync(join(root, "src/features/print/lib/bbox.mjs"), "utf8"), /clipFigureBottomBeforeBelow/);
 assert.match(readFileSync(join(root, "src/features/print/lib/bbox.mjs"), "utf8"), /FIGURE_BOTTOM_PAD = 0\.08/);
 assert.match(readFileSync(join(root, "src/features/print/lib/bbox.mjs"), "utf8"), /FIGURE_CAPTION_ROOM/);
+assert.match(readFileSync(join(root, "src/features/print/lib/bbox.mjs"), "utf8"), /looksLikeQuestionStem/);
+assert.match(readFileSync(join(root, "src/features/print/lib/bbox.mjs"), "utf8"), /estimateFigureCaptionEnd/);
+assert.match(readFileSync(join(root, "src/features/print/lib/question-number.mjs"), "utf8"), /looksLikeProblemStemText/);
 assert.match(readFileSync(join(root, "src/features/print/lib/bbox.mjs"), "utf8"), /FIGURE_STEM_CLEARANCE/);
 assert.match(readFileSync(join(root, "src/features/print/lib/bbox.mjs"), "utf8"), /asTable/);
 assert.match(readFileSync(join(root, "src/features/print/lib/document.mjs"), "utf8"), /normalizeShareScan/);
@@ -2237,7 +2547,8 @@ assert.match(printService, /question_text/);
 assert.match(printService, /isRawScanSourceUri/);
 assert.match(printService, /figureBase64/);
 assert.match(printService, /data:image/);
-assert.match(printService, /cropFigureToBase64/);
+assert.match(printService, /cropFigureResult/);
+assert.match(printService, /stemBoxesOnSameScan/);
 assert.match(printService, /enrichPrintFigureBoxes/);
 assert.match(printService, /resolveParentFigureBox/);
 assert.match(printService, /resolveSubFigureBox/);

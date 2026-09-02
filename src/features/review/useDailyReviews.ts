@@ -15,6 +15,7 @@ import { archiveStaleRecords, clampReviewStage, selectRecommendedReviews } from 
 import { printProblemsFromScans } from "@/src/features/print/lib/from-reviews.mjs";
 import { useScanStore } from "@/src/stores/scanStore";
 import { displayQuestionText, displayTopicTag, hasPrintableQuestion } from "@/src/features/print/lib/from-reviews.mjs";
+import { displayProblemNumber } from "@/src/features/print/lib/question-number.mjs";
 import { useCurrentChild } from "@/src/hooks/useCurrentChild";
 import { t } from "@/src/i18n";
 
@@ -124,7 +125,13 @@ export function useDailyReviews() {
         isArchived: (row as { is_archived?: boolean }).is_archived === true || row.status === "retired",
         is_archived: (row as { is_archived?: boolean }).is_archived === true || row.status === "retired",
         completed: assignment?.completed ?? false,
-        label: problem?.problem_label ?? t("common.questionBare"),
+        label:
+          displayProblemNumber({
+            problem_label: problem?.problem_label,
+            question_text: problem?.question_text,
+          }) ||
+          problem?.problem_label ||
+          t("common.questionBare"),
         topicTag: displayTopicTag(problem?.unit ?? problem?.topic_tags?.[0], problem?.problem_label),
         questionText: displayQuestionText(problem?.question_text, problem?.problem_label),
         blankedPath: blankPath ?? "",

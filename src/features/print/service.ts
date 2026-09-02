@@ -8,7 +8,7 @@ import { signedStorageUrl } from "@/src/lib/storage/signed-url";
 import { shouldUseRemote } from "@/src/lib/backend";
 import { maruLog, maruStep } from "@/src/lib/debug/maruLog";
 import { t } from "@/src/i18n";
-import { isRawScanSourceUri, isFullPageScanSource, toFileUri, cropFigureToBase64 } from "@/src/lib/files/scan-image";
+import { isRawScanSourceUri, isFullPageScanSource, toFileUri, cropFigureResult } from "@/src/lib/files/scan-image";
 import { isIncorrectForPrint, printProblemFromReview } from "@/src/features/print/from-reviews";
 import {
   buildPrintHtml,
@@ -23,6 +23,8 @@ import {
   resolveSubFigureBox,
   resolveInsetFigureBox,
   earliestStemBelowParent,
+  matchLeadingQuestionNumber,
+  looksLikeProblemStemText,
   styleToGridType,
   subFigureBoxOf,
   PRINT_CROP_REV,
@@ -132,6 +134,8 @@ export async function fetchIncorrectProblemsForPrint(childId?: string): Promise<
     return printProblemFromReview({
       id: problem.id,
       problemId: problem.id,
+      scanId: problem.scan_id,
+      scan_id: problem.scan_id,
       label,
       topicTag: problem.unit ?? problem.topic_tags?.[0] ?? "",
       questionText: problem.question_text,
@@ -180,6 +184,7 @@ function stripStoredFigureSrcs(problem: PrintProblem): PrintProblem {
     parentFigureBase64: "",
     subFigureSrc: "",
     subFigureBase64: "",
+    figureMasks: [],
     imageSrc: "",
     figure_image_src: "",
     figure_base64: "",
@@ -188,6 +193,67 @@ function stripStoredFigureSrcs(problem: PrintProblem): PrintProblem {
     sub_figure_src: "",
     sub_figure_base64: "",
   } as PrintProblem;
+}
+
+async function fetchScanStemGuides(problems: PrintProblem[]): Promise<PrintProblem[]> {
+  const scanIds = [
+    ...new Set(
+      problems
+        .map((problem) => String((problem as PrintProblem & { scanId?: string; scan_id?: string }).scanId ?? (problem as { scan_id?: string }).scan_id ?? "").trim())
+        .filter(Boolean),
+    ),
+  ];
+  if (!scanIds.length || !shouldUseRemote()) return [];
+  const pathByScan = new Map<string, string>();
+  for (const problem of problems) {
+    const sid = String((problem as { scanId?: string; scan_id?: string }).scanId ?? (problem as { scan_id?: string }).scan_id ?? "").trim();
+    const path = String(problem.originalPath ?? "").trim();
+    if (sid && path) pathByScan.set(sid, path);
+  }
+  const known = new Set(problems.map((problem) => String(problem.id ?? "")));
+  const { data, error } = await supabase
+    .from("problems")
+    .select("id, scan_id, question_text, gemini_bbox, bounding_box, context_text")
+    .in("scan_id", scanIds)
+    .limit(80);
+  if (error || !data?.length) return [];
+  return data
+    .filter((row) => row.id && !known.has(String(row.id)))
+    .map((row) => ({
+      id: String(row.id),
+      scanId: row.scan_id,
+      scan_id: row.scan_id,
+      questionText: row.question_text ?? "",
+      question_text: row.question_text ?? "",
+      bbox: row.gemini_bbox ?? row.bounding_box ?? null,
+      gemini_bbox: row.gemini_bbox ?? null,
+      contextText: row.context_text ?? "",
+      parentContext: row.context_text ?? "",
+      originalPath: pathByScan.get(String(row.scan_id ?? "")) ?? "",
+    })) as PrintProblem[];
+}
+
+function stemBoxesOnSameScan(pool: PrintProblem[], problem: PrintProblem) {
+  const path = String(problem.originalPath ?? "").trim();
+  const scanId = String(
+    (problem as PrintProblem & { scanId?: string; scan_id?: string }).scanId ??
+      (problem as { scan_id?: string }).scan_id ??
+      "",
+  ).trim();
+  const boxes: Array<[number, number, number, number]> = [];
+  for (const row of pool) {
+    const rowPath = String(row.originalPath ?? "").trim();
+    const rowScan = String(
+      (row as PrintProblem & { scanId?: string; scan_id?: string }).scanId ??
+        (row as { scan_id?: string }).scan_id ??
+        "",
+    ).trim();
+    if ((path && rowPath === path) || (scanId && rowScan === scanId)) {
+      const box = usableGeminiBox(row.bbox ?? row.gemini_bbox ?? (row as { geminiBbox?: unknown }).geminiBbox);
+      if (box) boxes.push(box);
+    }
+  }
+  return boxes;
 }
 
 function pickFullPageSource(problem: PrintProblem, signedOriginal: string) {
@@ -201,7 +267,9 @@ function pickFullPageSource(problem: PrintProblem, signedOriginal: string) {
 }
 
 export async function resolvePrintImageUrls(problems: PrintProblem[]): Promise<PrintProblem[]> {
+  const stemGuides = await fetchScanStemGuides(problems);
   const enriched = enrichPrintFigureBoxes(problems.map(stripStoredFigureSrcs));
+  const stemPool = [...enriched, ...stemGuides];
   return Promise.all(
     enriched.map(async (problem) => {
       if (problem.mediaExpired) {
@@ -226,7 +294,7 @@ export async function resolvePrintImageUrls(problems: PrintProblem[]): Promise<P
       const needsInset = needsInsetFigure(problem);
       const parentBox = resolveParentFigureBox(problem);
       const stemBox =
-        earliestStemBelowParent(enriched, parentBox, problem) ?? usableGeminiBox(problem.bbox) ?? null;
+        earliestStemBelowParent(stemPool, parentBox, problem) ?? usableGeminiBox(problem.bbox) ?? null;
       const subBox = needsTable
         ? resolveSubFigureBox(problem) ?? subFigureBoxOf(problem)
         : needsInset
@@ -272,9 +340,9 @@ export async function resolvePrintImageUrls(problems: PrintProblem[]): Promise<P
             clipBelow: unknown = null,
             asInset = false,
           ) => {
-            if (!box || !rawSource) return "";
+            if (!box || !rawSource) return { dataUri: "", masks: [] as Array<{ x: number; y: number; width: number; height: number }> };
             return (
-              (await cropFigureToBase64({
+              (await cropFigureResult({
                 sourceUri: rawSource,
                 cropBox: box,
                 scanId: String(problem.originalPath || problem.id),
@@ -283,11 +351,16 @@ export async function resolvePrintImageUrls(problems: PrintProblem[]): Promise<P
                 visualType: "has_figure",
                 asTable,
                 asInset,
-              })) ?? ""
+                hasQuestionStem: Boolean(
+                  looksLikeProblemStemText(problem.questionText ?? problem.question_text),
+                ),
+                stemBoxes: asTable || asInset ? [] : stemBoxesOnSameScan(stemPool, problem),
+                answerSlot: asTable || asInset ? null : usableGeminiBox(problem.bbox),
+              })) ?? { dataUri: "", masks: [] }
             );
           };
           const parentClipBelow =
-            earliestStemBelowParent(enriched, parentBox || legacyBox, problem) ??
+            earliestStemBelowParent(stemPool, parentBox || legacyBox, problem) ??
             usableGeminiBox(problem.bbox) ??
             null;
           const subTop = usableGeminiBox(subBox);
@@ -299,15 +372,17 @@ export async function resolvePrintImageUrls(problems: PrintProblem[]): Promise<P
               ? parentClipBelow ?? subTop
               : subTop ?? parentClipBelow
             : parentClipBelow;
-          const parentSrc = await cropOne(parentBox || legacyBox, "p", false, clipBelow);
+          const parentCrop = await cropOne(parentBox || legacyBox, "p", false, clipBelow);
           const insetAnswer = needsInset && !needsTable ? usableGeminiBox(problem.bbox) : null;
-          const subSrc = await cropOne(
+          const subCrop = await cropOne(
             subBox,
             "s",
             needsTable,
             insetAnswer,
             needsInset && !needsTable,
           );
+          const parentSrc = parentCrop.dataUri;
+          const subSrc = subCrop.dataUri;
           const printable = parentSrc.startsWith("data:image/")
             ? parentSrc
             : subSrc.startsWith("data:image/")
@@ -328,6 +403,7 @@ export async function resolvePrintImageUrls(problems: PrintProblem[]): Promise<P
             parentFigureBase64: parentSrc.startsWith("data:image/") ? parentSrc : "",
             subFigureSrc: subSrc.startsWith("data:image/") ? subSrc : "",
             subFigureBase64: subSrc.startsWith("data:image/") ? subSrc : "",
+            figureMasks: parentSrc.startsWith("data:image/") ? parentCrop.masks : subCrop.masks,
             originalImageSrc: problem.originalImageSrc || signedOriginal || "",
           };
         } catch (error) {

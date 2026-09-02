@@ -2,10 +2,11 @@ import { GEMINI_MODEL, GRADE_RESPONSE_SCHEMA } from "./schema.ts";
 import { parseGradeJson, gradeGeminiResponse } from "./validate.ts";
 import type { GradeResult } from "./schema.ts";
 import { parseEnrichItems, type EnrichItem } from "./enrich.ts";
+import { continuationUserPrompt, mergeProblemPayloads } from "./hybrid-grade.ts";
 
 const GEMINI_REST_ORIGIN = "https://generativelanguage.googleapis.com/v1beta/models";
-const GEMINI_FETCH_TIMEOUT_MS = 15_000;
-const GEMINI_MAX_OUTPUT_TOKENS = 2048;
+const GEMINI_FETCH_TIMEOUT_MS = 25_000;
+const GEMINI_MAX_OUTPUT_TOKENS = 8192;
 
 /** 3.5 は thinkingBudget:0 を受け付けないため minimal。2.5 は budget 0 */
 export const GEMINI_THINKING_BUDGET = 0;
@@ -150,7 +151,7 @@ async function generateJson(input: {
   userPrompt: string;
   image: GeminiImagePart;
   label: string;
-}): Promise<Record<string, unknown>> {
+}): Promise<{ parsed: Record<string, unknown>; finishReason: string | null }> {
   const url = geminiRestUrl(input.model, input.apiKey);
   const generationConfig = buildGenerationConfig(input.model);
   const body: Record<string, unknown> = {
@@ -234,7 +235,12 @@ async function generateJson(input: {
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("GEMINI_JSON_NOT_OBJECT");
   }
-  return parsed as Record<string, unknown>;
+  return { parsed: parsed as Record<string, unknown>, finishReason: meta.finishReason };
+}
+
+function payloadProblems(raw: Record<string, unknown>): unknown[] {
+  const problems = raw.problems ?? raw.questions;
+  return Array.isArray(problems) ? problems : [];
 }
 
 export async function callGeminiFlash(input: {
@@ -244,10 +250,31 @@ export async function callGeminiFlash(input: {
   userPrompt: string;
   image: GeminiImagePart;
 }): Promise<GradeResult> {
-  const raw = await generateJson({
+  const first = await generateJson({
     ...input,
     label: "grade",
   });
+  let raw = first.parsed;
+  let problems = payloadProblems(raw);
+  if (first.finishReason === "MAX_TOKENS" && problems.length > 0) {
+    const last = problems[problems.length - 1];
+    const lastIndex =
+      last && typeof last === "object" && !Array.isArray(last)
+        ? String((last as { problem_index?: unknown }).problem_index ?? "")
+        : "";
+    const more = await generateJson({
+      ...input,
+      userPrompt: `${continuationUserPrompt(lastIndex, problems.length)}\n${input.userPrompt}`,
+      label: "grade-continue",
+    });
+    raw = mergeProblemPayloads(raw, more.parsed);
+    problems = payloadProblems(raw);
+    console.log("[grade-scan] gemini continued after MAX_TOKENS", {
+      firstCount: payloadProblems(first.parsed).length,
+      mergedCount: problems.length,
+      continueFinish: more.finishReason,
+    });
+  }
   return gradeGeminiResponse(raw);
 }
 
@@ -262,7 +289,7 @@ export async function callGeminiEnrich(input: {
     ...input,
     label: "enrich",
   });
-  return parseEnrichItems(raw);
+  return parseEnrichItems(raw.parsed);
 }
 
 export function createGeminiClient(loadFixture?: () => GradeResult): GeminiClient {

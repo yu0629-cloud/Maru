@@ -12,6 +12,7 @@ import {
 import { ZoomableView } from "@/src/components/ZoomableView";
 import { CorrectMark, IncorrectMark, useGradeResultLabel, useResolvedMarkStyle } from "@/src/components/GradeMark";
 import { t, tMistake, useT } from "@/src/i18n";
+import { displayProblemNumber } from "@/src/features/print/html";
 import {
   displayCoachingTip,
   type GradedProblemView,
@@ -122,7 +123,11 @@ export function GradingPhotoOverlay({
                 key={problem.id}
                 accessibilityRole="button"
                 accessibilityLabel={t("scan.markA11y", {
-                  label: problem.problem_label,
+                  label:
+                    displayProblemNumber({
+                      problem_label: problem.problem_label,
+                      question_text: problem.question_text,
+                    }) || problem.problem_label,
                   result: problem.is_correct ? t("scan.correctShort") : t("scan.incorrectShort"),
                 })}
                 hitSlop={6}
@@ -165,7 +170,15 @@ export function ProblemDetailSheet({
         <View className="rounded-t-3xl bg-cream px-5 pb-8 pt-4" style={{ zIndex: 1 }} pointerEvents="auto">
           <View className="mb-3 h-1 w-12 self-center rounded-full bg-ink/20" />
           <View className="flex-row items-center justify-between">
-            <Text className="text-lg font-bold text-ink">{t("common.question", { label: problem.problem_label })}</Text>
+            <Text className="text-lg font-bold text-ink">
+              {t("common.question", {
+                label:
+                  displayProblemNumber({
+                    problem_label: problem.problem_label,
+                    question_text: problem.question_text,
+                  }) || problem.problem_label,
+              })}
+            </Text>
             <Pressable
               onPress={onToggle}
               className={`rounded-full px-3 py-1 ${problem.is_correct ? "bg-emerald-600" : "bg-maru-500"}`}

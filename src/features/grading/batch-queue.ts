@@ -55,7 +55,7 @@ export function kickBatchQueue() {
 async function runJob(job: { id: string; uri: string; width?: number; height?: number; childId: string; parentId: string }) {
   maruLog("batch", "job start", { id: job.id });
   try {
-    // job.uri はネイティブスキャナーで台形補正済みの用紙画像（またはライブラリ写真）
+    // job.uri はネイティブスキャナー済み、またはライブラリ写真を用紙クロップした画像
     const scan = await runGradePipeline({
       uri: job.uri,
       width: job.width,

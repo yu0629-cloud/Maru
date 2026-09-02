@@ -1,5 +1,5 @@
 import { Pressable, Text, View } from "react-native";
-import { formatMathExpression } from "@/src/features/print/html";
+import { displayProblemNumber, formatMathExpression } from "@/src/features/print/html";
 import { isBlankPrintAnswer, stripLatexDollars } from "@/src/features/print/from-reviews";
 import type { PrintProblem } from "@/src/features/print/html";
 import { usePrintStore } from "@/src/stores/printStore";
@@ -25,7 +25,12 @@ function answerLabel(problem: PrintProblem) {
 }
 
 function problemNumber(problem: PrintProblem, index: number) {
-  const label = stripLatexDollars(problem.problemIndex || problem.label);
+  const label =
+    displayProblemNumber({
+      questionText: problem.questionText,
+      problemIndex: problem.problemIndex,
+      label: problem.label,
+    }) || stripLatexDollars(problem.problemIndex || problem.label);
   if (label) return label.startsWith("問") || /^Q\d/i.test(label) ? label : t("common.question", { label });
   return t("common.question", { label: index + 1 });
 }
