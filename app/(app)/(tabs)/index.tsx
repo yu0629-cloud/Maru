@@ -3,6 +3,7 @@ import { ChildSwitcher } from "@/src/components/ChildSwitcher";
 import { QuotaBadge } from "@/src/components/QuotaBadge";
 import { ChildScoped } from "@/src/components/ChildScoped";
 import { useDailyReviews } from "@/src/features/review/useDailyReviews";
+import { usePrintStore } from "@/src/stores/printStore";
 import { useCurrentChild } from "@/src/hooks/useCurrentChild";
 import { useEnsureDemoChild } from "@/src/hooks/useEnsureDemoChild";
 import { useQuota } from "@/src/hooks/useQuota";
@@ -22,7 +23,8 @@ function HomeBody() {
   useEnsureDemoChild();
   const { currentChild } = useCurrentChild();
   const quota = useQuota();
-  const { daily } = useDailyReviews();
+  const { daily, todayRedo } = useDailyReviews();
+  const setScope = usePrintStore((state) => state.setScope);
   const remainingToday = daily.filter((item) => !item.completed).length;
 
   return (
@@ -45,13 +47,28 @@ function HomeBody() {
         <Text className="mt-1 text-center text-white/80">{t("home.scanHint", { remaining: quota.remaining })}</Text>
       </Pressable>
 
-      <Pressable className="mt-3 rounded-2xl bg-white px-4 py-4" onPress={() => push("/(app)/review")}>
-        <Text className="text-center text-lg font-bold text-ink">{t("home.reviewTitle", { count: remainingToday })}</Text>
-        <Text className="mt-1 text-center text-sm text-ink/60">{t("home.reviewHint")}</Text>
+      <Pressable
+        className="mt-3 rounded-2xl bg-white px-4 py-4"
+        onPress={() => {
+          setScope("today");
+          push("/(app)/print");
+        }}
+      >
+        <Text className="text-center text-lg font-bold text-ink">{t("home.todayRedoTitle")}</Text>
+        <Text className="mt-1 text-center text-sm text-ink/60">
+          {t("home.todayRedoHint", { count: todayRedo.length })}
+        </Text>
       </Pressable>
 
-      <Pressable className="mt-3 rounded-2xl bg-white px-4 py-4" onPress={() => push("/(app)/print")}>
-        <Text className="text-center text-lg font-bold text-ink">{t("home.printTitle")}</Text>
+      <Pressable
+        className="mt-3 rounded-2xl bg-white px-4 py-4"
+        onPress={() => {
+          setScope("recommended");
+          push("/(app)/review");
+        }}
+      >
+        <Text className="text-center text-lg font-bold text-ink">{t("home.recommendedTitle", { count: remainingToday })}</Text>
+        <Text className="mt-1 text-center text-sm text-ink/60">{t("home.recommendedHint")}</Text>
       </Pressable>
 
       <Pressable className="mt-3 rounded-2xl bg-white px-4 py-4" onPress={() => push("/(app)/carte")}>

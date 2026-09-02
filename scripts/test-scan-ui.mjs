@@ -395,6 +395,7 @@ assert.match(historyCardSrc, /ScanPrintMenuButton/);
 assert.match(historyCardSrc, /onLongPress/);
 assert.match(detailSrc, /t\("scan.delete"\)/);
 assert.match(detailSrc, /t\("scan.reassign"\)/);
+assert.match(detailSrc, /ScanChildBanner/);
 assert.match(storeSrc2, /remove:/);
 assert.match(storeSrc2, /updateChildId/);
 const topicMigration = readFileSync(join(root, "supabase/migrations/20240827000023_ensure_problem_topic.sql"), "utf8");

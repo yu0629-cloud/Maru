@@ -22,15 +22,24 @@ import {
   validateGradeResult,
 } from "./validate.ts";
 import { gradeMath, gradeShortText, gradeFreeText, answersMatchStrict, gradeExtractedProblems } from "./hybrid-grade.ts";
+import { resolveChildDetection, extractGradeCodes, normalizePersonName } from "./match-child.mjs";
 
 Deno.test("responseSchema は question_text を含む抽出キーを必須にする", () => {
-  assertEquals(GRADE_RESPONSE_SCHEMA.required, ["subject", "problems"]);
+  assertEquals(GRADE_RESPONSE_SCHEMA.required, [
+    "subject",
+    "problems",
+    "detected_child_id",
+    "detected_child_name",
+    "confidence_reason",
+  ]);
   const item = GRADE_RESPONSE_SCHEMA.properties.problems.items;
   assertEquals(item.required, [
     "problem_index",
     "question_text",
     "ground_truth",
     "student_answer",
+    "answer_type",
+    "is_blank",
     "is_correct",
     "correct_answer",
     "type",
@@ -40,11 +49,14 @@ Deno.test("responseSchema は question_text を含む抽出キーを必須にす
     "crop_box",
     "question_unit",
   ]);
+  assertEquals(item.properties.answer_type.enum, ["handwritten_text", "circle_selection", "none"]);
   assertEquals(Object.keys(item.properties), [
     "problem_index",
     "question_text",
     "ground_truth",
     "student_answer",
+    "answer_type",
+    "is_blank",
     "is_correct",
     "correct_answer",
     "type",
@@ -236,13 +248,20 @@ Deno.test("不正な得点や空の problems は拒否する", () => {
 });
 
 Deno.test("1次プロンプトは ground_truth を先に導かせ、手書きと厳密比較する", () => {
-  const prompt = buildSystemPrompt(SAMPLE_CARTE, {
-    name: "はると",
-    gradeLabel: "小4",
-    examTarget: "中学受験",
-  });
+  const prompt = buildSystemPrompt(
+    SAMPLE_CARTE,
+    {
+      id: "c1",
+      name: "はると",
+      gradeLabel: "小4",
+      examTarget: "中学受験",
+    },
+    [{ id: "c1", name: "はると", gradeLabel: "小4" }, { id: "c2", name: "ゆい", gradeLabel: "小6" }],
+  );
   assert(prompt.includes("はると"));
-  assert(prompt.includes("problem_index, question_text, ground_truth, student_answer, is_correct, correct_answer, type, topic, bbox, visual_type, crop_box, question_unit"));
+  assert(prompt.includes("子ども振り分け"));
+  assert(prompt.includes("detected_child_id"));
+  assert(prompt.includes("problem_index, question_text, ground_truth, student_answer, answer_type, is_blank, is_correct, correct_answer, type, topic, bbox, visual_type, crop_box, question_unit"));
   assert(prompt.includes("has_figure"));
   assert(prompt.includes("crop_box"));
   assert(prompt.includes("question_unit"));
@@ -277,6 +296,8 @@ Deno.test("1次プロンプトは ground_truth を先に導かせ、手書きと
   assert(prompt.includes("parent_context"));
   assert(prompt.includes("parent_figure_box"));
   assert(prompt.includes("sub_figure_box"));
+  assert(prompt.includes("右の図"));
+  assert(prompt.includes("差し込み"));
   assert(prompt.includes("1問=1件"));
   assert(prompt.includes("math"));
   assert(prompt.includes("text"));
@@ -301,6 +322,11 @@ Deno.test("1次プロンプトは ground_truth を先に導かせ、手書きと
   assert(prompt.includes('problem_index: "16"'));
   assert(prompt.includes("2 + 6 ="));
   assert(prompt.includes("解答欄"));
+  assert(prompt.includes("手書き解答"));
+  assert(prompt.includes("囲み型"));
+  assert(prompt.includes("circle_selection"));
+  assert(prompt.includes("気体採取器"));
+  assert(prompt.includes("空気の成分が変わる"));
   assert(prompt.includes("問題番号だけ"));
   assert(prompt.includes("50°"));
   assert(prompt.includes("130°"));
@@ -373,10 +399,25 @@ function createFakeSupabase() {
     from(table: string) {
       return {
         select() {
-          return {
+          const children = [
+            {
+              id: "c1",
+              parent_id: "p1",
+              name: "はると",
+              grade_code: "e4",
+              exam_target: "中学受験",
+            },
+          ];
+          const chain = {
             eq() {
-              return {
-                maybeSingle: async () => {
+              return chain;
+            },
+            order() {
+              return chain;
+            },
+            then: (resolve: (value: { data: unknown; error: null }) => void, reject: (reason?: unknown) => void) =>
+              Promise.resolve({ data: table === "children" ? children : [], error: null }).then(resolve, reject),
+            maybeSingle: async () => {
                   if (table === "scans") {
                     return {
                       data: {
@@ -407,9 +448,8 @@ function createFakeSupabase() {
                   }
                   return { data: null, error: null };
                 },
-              };
-            },
           };
+          return chain;
         },
         update() {
           const done = Promise.resolve({ error: null });
@@ -571,6 +611,8 @@ Deno.test("クライアントは storagePath だけ送り永続化は後段", as
   assertEquals(output.ok, true);
   assertEquals(output.dryRun, false);
   assertEquals(output.scanId, scanId);
+  assertEquals(output.child_id, "c1");
+  assertEquals(output.child_detection.fallback, true);
   assertEquals(output.problems.length, 4);
   assertEquals(fake.scans.length, 1);
   assertEquals(fake.inserts.length, 4);
@@ -801,6 +843,121 @@ Deno.test("手書きを正解にコピーしても分度器の外側目盛りと
     },
   ]);
   assertEquals(leverOk.problems[0].is_correct, true);
+});
+
+Deno.test("手書き解答欄以外の印刷ラベル・選択肢本文は答案にしない", () => {
+  const options = "① 空気がなくなる ② 空気の成分が変わる ③ 変わらない";
+  const bodyAsAnswer = gradeExtractedProblems([
+    {
+      problem_index: "(2)",
+      question_text: "(1)の結果からわかることを、次の①〜③から選び、番号を書きましょう。",
+      options_text: options,
+      student_answer: "空気がなくなる",
+      correct_answer: "2",
+      ground_truth: "2",
+      type: "text",
+      bbox: [220, 80, 255, 220],
+    },
+  ]);
+  assertEquals(bodyAsAnswer.problems[0].student_answer, "1");
+  assertEquals(bodyAsAnswer.problems[0].is_correct, false);
+
+  const printedLabel = gradeExtractedProblems([
+    {
+      problem_index: "2(1)",
+      question_text: "Aの器具の名前を書きましょう。",
+      student_answer: "気体採取器",
+      correct_answer: "気体採取器",
+      ground_truth: "気体採取器",
+      type: "text",
+      bbox: [520, 420, 720, 900],
+      parent_figure_box: [500, 380, 780, 960],
+    },
+  ]);
+  assertEquals(printedLabel.problems[0].is_correct, false);
+
+  const handwrittenOk = gradeExtractedProblems([
+    {
+      problem_index: "2(1)",
+      question_text: "Aの器具の名前を書きましょう。",
+      student_answer: "気体検知管",
+      correct_answer: "気体検知管",
+      ground_truth: "気体検知管",
+      type: "text",
+      bbox: [610, 80, 648, 280],
+    },
+  ]);
+  assertEquals(handwrittenOk.problems[0].is_correct, true);
+
+  const circled = gradeExtractedProblems([
+    {
+      problem_index: "1-(2)",
+      question_text: "(1)の結果からわかることを、次の①〜③から選びなさい。",
+      options_text: options,
+      student_answer: "2",
+      correct_answer: "2",
+      ground_truth: "2",
+      type: "text",
+      answer_type: "circle_selection",
+      bbox: [240, 120, 290, 210],
+      parent_figure_box: [80, 400, 420, 960],
+    },
+  ]);
+  assertEquals(circled.problems[0].is_correct, true);
+  assertEquals(circled.problems[0].answer_type, "circle_selection");
+  assertEquals(circled.problems[0].bbox, [240, 120, 290, 210]);
+
+  const circledShort = gradeExtractedProblems([
+    {
+      problem_index: "1-(2)",
+      question_text: "次の①〜③から選びなさい。",
+      options_text: options,
+      student_answer: "変わらない",
+      correct_answer: "3",
+      ground_truth: "3",
+      type: "text",
+      answer_type: "circle_selection",
+      bbox: [300, 120, 340, 260],
+    },
+  ]);
+  assertEquals(circledShort.problems[0].student_answer, "3");
+  assertEquals(circledShort.problems[0].is_correct, true);
+});
+
+Deno.test("名前欄と学年で登録済み子どもを照合し、不明なら選択中へ戻す", () => {
+  const yui = { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", name: "ゆい", grade_code: "e6" };
+  const taro = { id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", name: "たろう", grade_code: "e4" };
+  assertEquals(normalizePersonName("ユイ"), "ゆい");
+  assertEquals(extractGradeCodes("小学6年生"), ["e6"]);
+
+  const byName = resolveChildDetection({
+    children: [yui, taro],
+    fallbackChildId: taro.id,
+    hint: { detected_child_id: "", detected_child_name: "ゆい", confidence_reason: "名前欄に『ゆい』" },
+  });
+  assertEquals(byName.childId, yui.id);
+  assertEquals(byName.matched, true);
+  assertEquals(byName.fallback, false);
+
+  const byGrade = resolveChildDetection({
+    children: [yui, taro],
+    fallbackChildId: yui.id,
+    hint: {
+      detected_child_id: "",
+      detected_child_name: "",
+      confidence_reason: "学年が小4と読めた",
+    },
+  });
+  assertEquals(byGrade.childId, taro.id);
+  assertEquals(byGrade.matched, true);
+
+  const unknown = resolveChildDetection({
+    children: [yui, taro],
+    fallbackChildId: taro.id,
+    hint: { detected_child_id: "not-a-child", detected_child_name: "", confidence_reason: "" },
+  });
+  assertEquals(unknown.childId, taro.id);
+  assertEquals(unknown.fallback, true);
 });
 
 

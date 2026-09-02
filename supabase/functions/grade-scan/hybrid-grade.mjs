@@ -1,5 +1,18 @@
 import { resolveScanSubject } from "./subject.mjs";
 import { inferVisualType } from "./visual.mjs";
+import {
+  applyHandwritingSlotGuards,
+  canonicalizeChoiceAnswer,
+  normalizeAnswerType,
+  snapBBoxToAnswerSlot,
+} from "./answer-slot.mjs";
+
+export {
+  snapBBoxToAnswerSlot,
+  canonicalizeChoiceAnswer,
+  looksLikeFigureAnswerBBox,
+  normalizeAnswerType,
+} from "./answer-slot.mjs";
 
 export const GRADE_KINDS = ["math", "text"];
 
@@ -210,7 +223,7 @@ export function applyCopiedAnswerGuards(item, isCorrect, pageHay = "") {
     }
   }
 
-  return isCorrect;
+  return applyHandwritingSlotGuards(item, isCorrect);
 }
 
 export function numbersEqual(a, b) {
@@ -376,7 +389,7 @@ export function extractProblemList(raw) {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
     throw new Error("EXTRACT_NOT_OBJECT");
   }
-  const problems = raw.problems ?? raw.questions;
+  const problems = raw.problems ?? raw.questions ?? raw.answers;
   if (!Array.isArray(problems) || problems.length === 0) {
     throw new Error("EXTRACT_PROBLEMS_REQUIRED");
   }
@@ -406,7 +419,16 @@ export function parseExtractProblems(raw) {
     const problemIndex =
       formulaInIndex && !printed ? String(index + 1) : numberLike || `問${index + 1}`;
     const questionText = printed || (formulaInIndex ? numberLike : "");
-    const studentAnswer = String(row.student_answer ?? row.user_answer ?? row.userAnswer ?? "").trim();
+    const rawStudent = row.student_answer ?? row.user_answer ?? row.userAnswer;
+    const flaggedBlank = row.is_blank === true || rawStudent == null || String(rawStudent).trim() === "";
+    const answerTypeHint = flaggedBlank
+      ? "none"
+      : normalizeAnswerType(row.answer_type, String(rawStudent ?? "").trim());
+    const studentAnswer = flaggedBlank
+      ? ""
+      : canonicalizeChoiceAnswer(String(rawStudent).trim(), optionsText, answerTypeHint);
+    const isBlank = flaggedBlank || !studentAnswer;
+    const answerType = isBlank ? "none" : answerTypeHint;
     const groundTruth = String(row.ground_truth ?? row.groundTruth ?? "").trim();
     const correctAnswer = groundTruth || String(row.correct_answer ?? "").trim();
     const topic = String(row.topic ?? row.topic_tag ?? "").trim();
@@ -416,7 +438,9 @@ export function parseExtractProblems(raw) {
     return {
       problem_index: problemIndex,
       question_text: questionText,
-      student_answer: studentAnswer,
+      student_answer: isBlank ? "" : studentAnswer,
+      answer_type: isBlank ? "none" : answerType,
+      is_blank: isBlank,
       correct_answer: correctAnswer,
       ground_truth: groundTruth || correctAnswer,
       type: kind,
@@ -446,7 +470,11 @@ export function gradeExtractedProblems(extracted, subjectHint) {
     .map((item) => [item.question_text, item.topic, item.word_bank, item.options_text, item.context_text].filter(Boolean).join(" "))
     .join(" ");
   const problems = extracted.map((item, index) => {
-    const ground = item.ground_truth || item.correct_answer;
+    const options = item.options_text || item.word_bank;
+    const blank = item.is_blank === true || !item.student_answer;
+    const answerType = blank ? "none" : normalizeAnswerType(item.answer_type, item.student_answer);
+    const studentAnswer = blank ? "" : canonicalizeChoiceAnswer(item.student_answer, options, answerType);
+    const ground = canonicalizeChoiceAnswer(item.ground_truth || item.correct_answer, options, answerType);
     const hasFormula = Boolean(
       extractArithmeticExpression(item.question_text) || extractArithmeticExpression(item.problem_index),
     );
@@ -455,13 +483,29 @@ export function gradeExtractedProblems(extracted, subjectHint) {
         ? gradeMath({
             questionText: item.question_text,
             problemIndex: item.problem_index,
-            studentAnswer: item.student_answer,
+            studentAnswer,
             correctAnswer: ground,
           })
-        : answersMatchStrict(item.student_answer, ground);
-    const isCorrect = applyCopiedAnswerGuards(item, rawCorrect, pageHay);
-
-    const blank = !item.student_answer;
+        : answersMatchStrict(studentAnswer, ground);
+    const originalBbox = coerceGeminiBBox(item.bbox, index, total);
+    const isCorrect = applyCopiedAnswerGuards(
+      {
+        ...item,
+        student_answer: studentAnswer,
+        ground_truth: ground,
+        correct_answer: ground,
+        bbox: originalBbox,
+        answer_type: answerType,
+      },
+      rawCorrect,
+      pageHay,
+    );
+    const snapped = snapBBoxToAnswerSlot(
+      originalBbox,
+      item.parent_figure_box,
+      item.sub_figure_box,
+      answerType,
+    );
     const problemType = problemTypeFromKind(item.type, `${item.question_text} ${item.problem_index}`);
     const expected =
       item.type === "math"
@@ -471,9 +515,11 @@ export function gradeExtractedProblems(extracted, subjectHint) {
     return {
       problem_index: item.problem_index,
       question_text: item.question_text,
-      bbox: coerceGeminiBBox(item.bbox, index, total),
+      bbox: snapped,
       is_correct: isCorrect,
-      student_answer: item.student_answer,
+      student_answer: studentAnswer,
+      answer_type: blank ? "none" : answerType,
+      is_blank: blank,
       correct_answer:
         expected !== null && item.type === "math" && hasFormula ? String(expected) : ground,
       ground_truth: ground,

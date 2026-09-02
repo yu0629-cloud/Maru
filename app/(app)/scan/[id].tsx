@@ -6,6 +6,7 @@ import { AnalyzingOverlay } from "@/src/components/AnalyzingOverlay";
 import { ExpiredMediaNotice } from "@/src/components/ExpiredMediaNotice";
 import { GradingPhotoOverlay, ProblemDetailSheet } from "@/src/components/GradingPhotoOverlay";
 import { SafeMediaImage } from "@/src/components/SafeMediaImage";
+import { ScanChildBanner } from "@/src/components/ScanChildBanner";
 import { ScanPrintMenuButton, useScanPrintActions } from "@/src/components/ScanPrintMenu";
 import { SubjectTag } from "@/src/components/SubjectTag";
 import {
@@ -209,6 +210,7 @@ function ScanDetailBody({
           {t("common.points", { earned: score.earned, max: score.max })}
           {showExpiredPhoto && !scan.isDemo ? t("scan.expiredHint") : t("scan.pinchHint")}
         </Text>
+        <ScanChildBanner scan={scan} onChangeChild={openChildPicker} />
 
         {photoUri && !photoFailed ? (
           <GradingPhotoOverlay

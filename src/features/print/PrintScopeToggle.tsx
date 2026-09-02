@@ -6,8 +6,8 @@ export function PrintScopeToggle() {
   const scope = usePrintStore((state) => state.scope);
   const setScope = usePrintStore((state) => state.setScope);
   const options: Array<{ id: PrintProblemScope; label: string; hint: string }> = [
-    { id: "daily", label: t("review.scopeDaily"), hint: t("review.scopeDailyHint") },
-    { id: "all", label: t("review.scopeAll"), hint: t("review.scopeAllHint") },
+    { id: "today", label: t("review.scopeToday"), hint: t("review.scopeTodayHint") },
+    { id: "recommended", label: t("review.scopeRecommended"), hint: t("review.scopeRecommendedHint") },
   ];
 
   return (
@@ -15,7 +15,7 @@ export function PrintScopeToggle() {
       <Text className="text-sm font-bold text-ink">{t("review.scopeTitle")}</Text>
       <View className="mt-2 flex-row">
         {options.map((option) => {
-          const selected = scope === option.id;
+          const selected = scope === option.id || (scope === "daily" && option.id === "recommended") || (scope === "all" && option.id === "today");
           return (
             <Pressable
               key={option.id}
@@ -31,7 +31,7 @@ export function PrintScopeToggle() {
           );
         })}
       </View>
-      <Text className="mt-2 text-xs text-ink/60">{options.find((option) => option.id === scope)?.hint}</Text>
+      <Text className="mt-2 text-xs text-ink/60">{options.find((option) => option.id === scope || (scope === "daily" && option.id === "recommended") || (scope === "all" && option.id === "today"))?.hint}</Text>
     </View>
   );
 }

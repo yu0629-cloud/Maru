@@ -65,11 +65,13 @@ export function printProblemFromReview(item?: object | null): {
   blankedPath: string;
   croppedPath: string;
   originalPath: string;
+  localUri?: string;
   imageSrc: string;
   blankedImageSrc: string;
   croppedImageSrc: string;
   originalImageSrc: string;
-  isCorrect: false;
+  isCorrect: boolean;
+  printRole?: "review" | "prerequisite";
   isBlanked: boolean;
   mediaExpired: boolean;
 };
@@ -91,15 +93,16 @@ export function collectPrintProblems(input?: {
   extras?: unknown[];
   childId?: string;
   fallback?: unknown[];
-  scope?: "daily" | "all";
+  scope?: "today" | "recommended" | "daily" | "all";
   preferredIds?: Array<string | number | null | undefined>;
 }): ReturnType<typeof printProblemFromReview>[];
 export function stripLatexDollars(text?: string | null): string;
 export const DAILY_PRINT_MAX: 5;
+export const RECOMMENDED_PRINT_MAX: 6;
 export function hasPrintableQuestion(item?: object | null): boolean;
 export function selectProblemsForScope(
   problems?: unknown[],
-  scope?: "daily" | "all",
+  scope?: "today" | "recommended" | "daily" | "all",
   preferredIds?: Array<string | number | null | undefined>,
 ): ReturnType<typeof printProblemFromReview>[];
 export function contentDedupeKey(problem?: object | null): string;

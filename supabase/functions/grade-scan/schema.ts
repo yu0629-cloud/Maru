@@ -59,6 +59,8 @@ export type GradeProblem = {
   bbox: GeminiBBox;
   is_correct: boolean;
   student_answer: string;
+  answer_type?: "handwritten_text" | "circle_selection" | "none";
+  is_blank?: boolean;
   correct_answer: string;
   topic_tag: string;
   difficulty_level: DifficultyLevel;
@@ -75,10 +77,17 @@ export type GradeProblem = {
   sub_figure_box?: GeminiBBox | null;
 };
 
+export type ChildDetectionHint = {
+  detected_child_id: string;
+  detected_child_name: string;
+  confidence_reason: string;
+};
+
 export type GradeResult = {
   subject: SubjectCode;
   overall_score: OverallScore;
   problems: GradeProblem[];
+  child_detection?: ChildDetectionHint;
 };
 
 export type CarteJson = {
@@ -104,7 +113,8 @@ export type CarteJson = {
  * Gemini に出させる抽出キー。ground_truth は手書きを見る前に問題・図から導く。
  * is_correct は ground_truth と student_answer の比較。サーバ側でも再判定する。
  * problem_index は問番号（"3", "16"）。question_text は解く式や設問文。番号だけは禁止。
- * bbox は「=」のすぐ右の解答欄 [ymin, xmin, ymax, xmax]（各 0〜1000）。式全体ではない。
+ * bbox は手書き文字、または手書きの丸で囲まれた対象 [ymin, xmin, ymax, xmax]（各 0〜1000）。図や設問文全体ではない。
+ * answer_type は handwritten_text / circle_selection / none。未記入は is_blank=true。
  * visual_type は文字だけで解けるか、図が必要か、長文本文が必要か。
  * question_unit は復習用の完全ユニット。parent_context / question_text / options_text / parent_figure_box / sub_figure_box。
  * parent_figure_box は大問の共通図。sub_figure_box は設問ごとの表・グラフ。付属ラベル・引き出し線・記号を含む完全境界。外側余白は約 2〜3%。問題文テキストと手書きは含めない。
@@ -113,6 +123,21 @@ export type CarteJson = {
 export const GRADE_RESPONSE_SCHEMA = {
   type: "OBJECT",
   properties: {
+    detected_child_id: {
+      type: "STRING",
+      description:
+        "UUID of the registered child who owns this worksheet, copied exactly from the roster. Empty string if unknown. Never invent an id.",
+    },
+    detected_child_name: {
+      type: "STRING",
+      description:
+        "Handwritten text in the name / なまえ / 氏名 field, exactly as written. Empty string if blank or missing.",
+    },
+    confidence_reason: {
+      type: "STRING",
+      description:
+        "Short Japanese reason, e.g. 名前欄に『ゆい』と記載、学年が小4で一致したため. If unknown, say 名前欄を特定できなかった.",
+    },
     subject: {
       type: "STRING",
       format: "enum",
@@ -128,7 +153,7 @@ export const GRADE_RESPONSE_SCHEMA = {
           problem_index: {
             type: "STRING",
             description:
-              'Question number only (circled or leading), e.g. "3" or "16". Never the formula. Example: print "⑯ 2 + 4 = 6" → "16".',
+              'Question number only, e.g. "1-(1)", "3", or "16". Never the formula. Example: print "⑯ 2 + 4 = 6" → "16".',
           },
           question_text: {
             type: "STRING",
@@ -143,12 +168,23 @@ export const GRADE_RESPONSE_SCHEMA = {
           student_answer: {
             type: "STRING",
             description:
-              "Step2: the child's handwritten answer exactly as written (e.g. 120° even if it is not in the word bank). Not the question number. Empty string if blank.",
+              "ONLY child handwriting (pencil/pen). Fill-in: text inside (), [], underline, or blank. Circle: the circled choice symbol/number (①/2/ア), NOT the printed sentence unless that word itself is circled. NEVER a printed figure label (気体採取器, ハンドル) or uncircled choice text. Empty string if blank (treat as null).",
+          },
+          answer_type: {
+            type: "STRING",
+            format: "enum",
+            enum: ["handwritten_text", "circle_selection", "none"],
+            description:
+              "handwritten_text=writing in a slot. circle_selection=hand-drawn circle/box around a printed choice. none=no handwriting on this item.",
+          },
+          is_blank: {
+            type: "BOOLEAN",
+            description: "true when no child handwriting is visible for this item. Then student_answer must be empty.",
           },
           is_correct: {
             type: "BOOLEAN",
             description:
-              "Step3: true only if student_answer matches ground_truth. If they differ, MUST be false. For select-all questions, missing any required choice is false.",
+              "Step3: true only if student_answer matches ground_truth. If they differ, MUST be false. Single-choice: handwritten 1 vs derived 2 is false. Never mark true just because the child wrote something. For select-all, missing any required choice is false.",
           },
           correct_answer: {
             type: "STRING",
@@ -163,7 +199,7 @@ export const GRADE_RESPONSE_SCHEMA = {
           bbox: {
             type: "ARRAY",
             description:
-              "Answer slot immediately to the right of printed '=' (where the child writes). NOT the whole formula, NOT the circled question number. [ymin,xmin,ymax,xmax] 0-1000. One row's blank/handwriting box only. Include empty slots.",
+              "Coordinates of the handwriting itself, or of the printed choice that has a hand-drawn circle. NOT the whole formula, NOT the figure, NOT uncircled labels. [ymin,xmin,ymax,xmax] 0-1000. Empty fill-in slots: the blank only.",
             minItems: 4,
             maxItems: 4,
             items: { type: "NUMBER" },
@@ -218,7 +254,7 @@ export const GRADE_RESPONSE_SCHEMA = {
               sub_figure_box: {
                 type: "ARRAY",
                 description:
-                  "This sub-question's own ruled table/chart/data figure, applying the same complete-boundary rule (header through last row, left/right borders, axis labels/units). Non-zero when a table/chart is required OR helpful to solve (表にまとめると / 和にまとめると / 次の表 / 下の表 / 実験の結果 / 下のようになりました / グラフ), e.g. (2)(3)(6): the 左のうで / 右のうで / おもりの位置と重さ table. NEVER [0,0,0,0] in that case. When a shared parent illustration AND a data table both exist and either is required or helpful (lever diagram + weight table), fill BOTH parent_figure_box and sub_figure_box — do not omit the parent just because the table is primary. Not the parent illustration. Never include handwriting. [ymin,xmin,ymax,xmax] 0-1000. [0,0,0,0] only if none.",
+                  "This sub-question's own ruled table/chart/data figure OR inset illustration ('右の図' / '左の図' beside the stem), applying the same complete-boundary rule (header through last row, left/right borders, axis labels/units, or the full inset drawing including hands/labels). Non-zero when a table/chart is required OR helpful to solve (表にまとめると / 和にまとめると / 次の表 / 下の表 / 実験の結果 / 下のようになりました / グラフ), e.g. (2)(3)(6): the 左のうで / 右のうで / おもりの位置と重さ table. Also non-zero for 右の図 / 左の図 inset drawings that are NOT the shared parent figure. NEVER [0,0,0,0] in that case. When a shared parent illustration AND a data table both exist and either is required or helpful (lever diagram + weight table), fill BOTH parent_figure_box and sub_figure_box — do not omit the parent just because the table is primary. Not the parent illustration. Never include handwriting. [ymin,xmin,ymax,xmax] 0-1000. [0,0,0,0] only if none.",
                 minItems: 4,
                 maxItems: 4,
                 items: { type: "NUMBER" },
@@ -262,6 +298,8 @@ export const GRADE_RESPONSE_SCHEMA = {
           "question_text",
           "ground_truth",
           "student_answer",
+          "answer_type",
+          "is_blank",
           "is_correct",
           "correct_answer",
           "type",
@@ -276,6 +314,8 @@ export const GRADE_RESPONSE_SCHEMA = {
           "question_text",
           "ground_truth",
           "student_answer",
+          "answer_type",
+          "is_blank",
           "is_correct",
           "correct_answer",
           "type",
@@ -289,8 +329,8 @@ export const GRADE_RESPONSE_SCHEMA = {
       },
     },
   },
-  required: ["subject", "problems"],
-  propertyOrdering: ["subject", "problems"],
+  required: ["subject", "problems", "detected_child_id", "detected_child_name", "confidence_reason"],
+  propertyOrdering: ["subject", "problems", "detected_child_id", "detected_child_name", "confidence_reason"],
 } as const;
 
 /** 1次採点用。2.5 Flash Lite は新規キーで 404 になるため 3.5 Lite を使う */

@@ -31,3 +31,4 @@ export function resolveQuestionNumber(sources?: {
   body: string;
 };
 export function stripLeadingQuestionNumber(text?: unknown): string;
+export function referencedPartTokens(text?: unknown): string[];

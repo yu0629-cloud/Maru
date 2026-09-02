@@ -91,11 +91,12 @@ export function matchLeadingQuestionNumber(text) {
   }
 
   // 丸: ① / (1) / 1. / (a)
-  m = s.match(/^([①-⑳❶-❿])/u);
+  // 「(1)の結果」「①の器具」は参照なので設問番号にしない
+  m = s.match(/^([①-⑳❶-❿])(?!\s*の)/u);
   if (m) {
     return { style: "round", token: normalizeToken(m[1]), raw: m[1], rest: s.slice(m[1].length).replace(/^[\s　．.、:：]+/u, "") };
   }
-  m = s.match(/^([\(（]\s*([0-9０-９a-zA-Z]+)\s*[\)）])/u);
+  m = s.match(/^([\(（]\s*([0-9０-９a-zA-Z]+)\s*[\)）])(?!\s*の)/u);
   if (m) {
     return { style: "round", token: normalizeToken(m[2]), raw: m[1], rest: s.slice(m[1].length).replace(/^[\s　．.、:：]+/u, "") };
   }
@@ -209,4 +210,15 @@ export function resolveQuestionNumber(sources = {}) {
 export function stripLeadingQuestionNumber(text) {
   const hit = matchLeadingQuestionNumber(text);
   return hit ? hit.rest : String(text ?? "").trim();
+}
+
+/** 「(1)の結果から」など、直前の小問を指している番号 */
+export function referencedPartTokens(text) {
+  const s = String(text ?? "");
+  const tokens = [];
+  for (const match of s.matchAll(/[\(（]\s*([0-9０-９]+)\s*[\)）]\s*の/gu)) {
+    const token = normalizeToken(match[1]);
+    if (token && !tokens.includes(token)) tokens.push(token);
+  }
+  return tokens;
 }

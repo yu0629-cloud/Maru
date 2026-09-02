@@ -138,7 +138,7 @@ function isExplicitIncorrect(item) {
 }
 
 function isReviewExcluded(item) {
-  return item?.status === "leech" || item?.status === "retired";
+  return item?.status === "leech" || item?.status === "retired" || item?.isArchived === true || item?.is_archived === true;
 }
 
 function isOverdueMastery(item, masteryByKey, today) {

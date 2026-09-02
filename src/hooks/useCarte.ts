@@ -16,7 +16,7 @@ import {
   type SubjectGroup,
   type TopicGroup,
 } from "@/src/features/carte/stats";
-import type { Database, TriageLevel, WeakUnit } from "@/src/types/database";
+import type { Database, ReviewItemStatus, TriageLevel, WeakUnit } from "@/src/types/database";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 export type { CarteProblemRow, SubjectGroup, TopicGroup };
@@ -118,7 +118,7 @@ function problemsFromLocalScans(childId: string | null): CarteProblemRow[] {
   for (const scan of Object.values(useScanStore.getState().scans) as ScanRecord[]) {
     if (scan.isDemo) continue;
     const scanChild = scan.childId ?? null;
-    if (childId && scanChild && scanChild !== childId) continue;
+    if (childId && scanChild !== childId) continue;
     for (const problem of scan.problems ?? []) {
       rows.push({
         id: problem.id,
@@ -155,7 +155,7 @@ async function fetchProblemsForCarte(scanIds: string[], childId: string | null):
     return supabase
       .from("problems")
       .select(select)
-      .or(`child_id.eq.${childId},child_id.is.null`)
+      .eq("child_id", childId)
       .order("created_at", { ascending: false })
       .limit(500);
   };
@@ -173,8 +173,11 @@ export type UseCarteResult = {
   carte: CarteView;
   problems: CarteProblemRow[];
   leeches: ReviewQueueItem[];
+  records: ReviewQueueItem[];
   resolveLeech: (item: ReviewQueueItem, action: LeechAction) => Promise<void>;
   restoreLeech: (id: string) => Promise<void>;
+  markUnderstood: (item: ReviewQueueItem) => Promise<void>;
+  skipRecord: (item: ReviewQueueItem) => Promise<void>;
   mocked: boolean;
 };
 
@@ -183,6 +186,8 @@ export function useCarte(): UseCarteResult {
   const parentId = useAuthStore((state) => state.userId);
   const items = useReviewStore((state) => state.items);
   const resolveLeechInStore = useReviewStore((state) => state.resolveLeech);
+  const markMasteredInStore = useReviewStore((state) => state.markMastered);
+  const archiveInStore = useReviewStore((state) => state.archiveItem);
   const [carte, setCarte] = useState<CarteView>(EMPTY_CARTE);
   const [problems, setProblems] = useState<CarteProblemRow[]>([]);
   const mock = !shouldUseRemote(parentId) || Boolean(currentChildId && !shouldUseRemote(currentChildId));
@@ -264,13 +269,40 @@ export function useCarte(): UseCarteResult {
     [resolveLeech],
   );
 
+  const persistRecord = useCallback(
+    async (item: ReviewQueueItem, patch: { status?: ReviewItemStatus; is_archived?: boolean; review_stage?: number }) => {
+      if (mock) return;
+      await supabase.from("review_queue").update(patch).eq("id", item.id);
+    },
+    [mock],
+  );
+
+  const markUnderstood = useCallback(
+    async (item: ReviewQueueItem) => {
+      markMasteredInStore(item.id);
+      await persistRecord(item, { status: "mastered", is_archived: false, review_stage: 3 });
+    },
+    [markMasteredInStore, persistRecord],
+  );
+
+  const skipRecord = useCallback(
+    async (item: ReviewQueueItem) => {
+      archiveInStore(item.id);
+      await persistRecord(item, { status: "retired", is_archived: true });
+    },
+    [archiveInStore, persistRecord],
+  );
+
   return {
     child: currentChild,
     carte,
     problems,
     leeches: isolateLeeches(items),
+    records: items,
     resolveLeech,
     restoreLeech,
+    markUnderstood,
+    skipRecord,
     mocked: mock,
   };
 }

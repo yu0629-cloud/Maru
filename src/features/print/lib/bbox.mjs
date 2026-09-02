@@ -73,11 +73,235 @@ export const FIGURE_CAPTION_ROOM = 42;
 export const FIGURE_STEM_CLEARANCE = 96;
 /** ページ上部の親図が (1) 本文へ食い込まない上限 */
 export const PARENT_FIGURE_YMAX = 510;
+/** リード文帯の下限。これより下は図のラベル（ふた・㋐・目盛）側 */
+export const LEAD_BAND_END = 148;
+/** 右カラム差し込みの左端。設問本文列へ食い込ませず、図の左端は残す */
+export const RIGHT_INSET_XMIN = 630;
+/** 差し込み1枚分の高さ。図の下端は残し、次の小問までは伸ばさない */
+export const INSET_MIN_HEIGHT = 188;
+/** 右差し込みの幅上限。ページ右の空きまでは広げない。図の右端は詰めない */
+export const INSET_MAX_WIDTH = 282;
+/** 本文列との境に残る切れ端1列分。ページ端側は触らない */
+export const INSET_INNER_GUTTER = 32;
 
 export function looksLikeTopParentFigure(box) {
   const n = usableGeminiBox(box);
   if (!n) return false;
   return n[0] <= 240 && n[2] - n[0] >= 90;
+}
+
+/** 設問横の解答欄（低く狭い、または右寄りの枠）。差し込み図の下端クリップに使う */
+export function looksLikeAnswerSlot(box) {
+  const n = usableGeminiBox(box);
+  if (!n) return false;
+  const h = n[2] - n[0];
+  const w = n[3] - n[1];
+  return h <= 160 && (w <= 420 || n[1] >= 480);
+}
+
+/** 左カラムの設問本文。差し込み図の左端をこの右端で止める */
+export function looksLikeLeftStemColumn(box) {
+  const n = usableGeminiBox(box);
+  if (!n) return false;
+  return n[1] <= 160 && n[3] <= 700 && n[3] - n[1] >= 280;
+}
+
+/** 設問文が左〜中央にある（全幅の bbox でも本文列として扱う） */
+export function looksLikeTextColumnBesideInset(stem, inset) {
+  const n = usableGeminiBox(stem);
+  const exp = usableGeminiBox(inset);
+  if (!n || !exp) return false;
+  if (n[1] > 220 || n[3] - n[1] < 280) return false;
+  const overlapY = Math.min(n[2], exp[2]) - Math.max(n[0], exp[0]);
+  return overlapY > 40;
+}
+
+/** 本文列の右端。全幅箱はページ右まで伸びるので、左〜中央で切る */
+export function textColumnRightEdge(stem) {
+  const n = usableGeminiBox(stem);
+  if (!n) return null;
+  if (n[3] > 720) return 652;
+  return n[3];
+}
+
+/** 右差し込みの左端。本文列の直後から始め、プリントごとに630へ固定しない */
+export function rightInsetColumnStart(stem, box) {
+  const n = usableGeminiBox(stem);
+  if (!n) return RIGHT_INSET_XMIN;
+  const probe = usableGeminiBox(box) ?? [300, RIGHT_INSET_XMIN, 520, 980];
+  if (!looksLikeTextColumnBesideInset(n, probe) && !looksLikeLeftStemColumn(n)) return RIGHT_INSET_XMIN;
+  return clamp((textColumnRightEdge(n) ?? 640) + INSET_INNER_GUTTER, 480, 760);
+}
+
+/** 差し込みが設問本文列へ食い込んだら、本文の右端＋切れ端分から始める */
+export function clipInsetLeftAfterStem(expanded, stemBox) {
+  const exp = usableGeminiBox(expanded);
+  const stem = usableGeminiBox(stemBox);
+  if (!exp) return null;
+  if (!looksLikeTextColumnBesideInset(stem, exp) && !looksLikeLeftStemColumn(stem)) return exp;
+  const textRight = textColumnRightEdge(stem) ?? stem[3];
+  const after = textRight + INSET_INNER_GUTTER;
+  if (after <= exp[1] + 4) return exp;
+  if (exp[3] - after < 160) return exp;
+  return [exp[0], clamp(after, 0, 1000), exp[2], exp[3]];
+}
+
+/**
+ * 差し込み図の下端を、直下の設問続き・手書き解答の直前で止める。
+ * 図のびん底は残し、印刷文や前回の「( 2 )」は入れない。
+ */
+export function clipInsetBottomBeforeAnswer(expanded, original, answerBox, gap = 8) {
+  const exp = usableGeminiBox(expanded);
+  const ans = usableGeminiBox(answerBox);
+  if (!exp) return null;
+  if (!ans) return exp;
+  const overlapX = Math.min(exp[3], ans[3]) - Math.max(exp[1], ans[1]);
+  let stop = exp[2];
+  if (looksLikeAnswerSlot(ans) && overlapX >= 48 && ans[0] > exp[0] + 140 && ans[0] < exp[2] + 64) {
+    stop = Math.min(stop, ans[0] - gap);
+  } else if (ans[2] - ans[0] > 180 && overlapX >= 48) {
+    const answerBand = ans[2] - 72;
+    if (answerBand > exp[0] + 160 && exp[2] > answerBand) {
+      stop = Math.min(stop, answerBand - gap);
+    }
+  }
+  if (!(stop > exp[0] + 150) || !(stop < exp[2])) return exp;
+  return [exp[0], exp[1], clamp(stop, 0, 1000), exp[3]];
+}
+
+/**
+ * 差し込みは設問の先頭ブロックの横だけ。
+ * 選択肢・「番号を書きましょう」・次の小問は同じカラムに落ちても入れない。
+ */
+export function clipInsetToStemWindow(expanded, stemBox) {
+  const exp = usableGeminiBox(expanded);
+  const stem = usableGeminiBox(stemBox);
+  if (!exp) return null;
+  if (!stem) return exp;
+  const beside = looksLikeLeftStemColumn(stem) || looksLikeTextColumnBesideInset(stem, exp) || stem[0] <= exp[0] + 100;
+  if (!beside) return exp;
+  const stemH = Math.max(1, stem[2] - stem[0]);
+  const aligned = stem[0] <= exp[0] + 48;
+  const figureSpan = clamp(stemH * 0.7, 188, 220);
+  const windowEnd = (aligned ? stem[0] : exp[0]) + figureSpan;
+  const stop = Math.max(windowEnd, exp[0] + 176);
+  if (!(stop < exp[2]) || !(stop > exp[0] + 150)) return exp;
+  return [exp[0], exp[1], clamp(stop, 0, 1000), exp[3]];
+}
+
+/** 短い箱を伸ばしたとき、親図の底・本文のはみ出し・直下1行を端から落とす */
+export function trimInsetSliverEdges(expanded, original) {
+  const exp = usableGeminiBox(expanded);
+  const orig = usableGeminiBox(original);
+  if (!exp) return null;
+  if (!orig || orig[2] - orig[0] >= 140) return exp;
+  return trimInsetNeighborEdges(exp, null, { fromSliver: true });
+}
+
+function insetPlaceOf(box, options = {}) {
+  if (options.place === "left" || options.place === "right") return options.place;
+  const n = usableGeminiBox(box);
+  return n && n[3] <= 440 && n[1] < 400 ? "left" : "right";
+}
+
+/**
+ * 差し込みの内側（本文列側）の切れ端だけ落とす。
+ * ページ端側・上下は触らない。特定プリントの座標は使わない。
+ */
+export function trimInsetNeighborEdges(expanded, stem, options = {}) {
+  const exp = usableGeminiBox(expanded);
+  if (!exp) return null;
+  const place = insetPlaceOf(exp, options);
+  let ymin = exp[0];
+  let xmin = exp[1];
+  let ymax = exp[2];
+  let xmax = exp[3];
+  if (place === "left") {
+    // 左の図: 右が本文列。ページ左端は維持
+    if (xmax - xmin >= 180) xmax = Math.max(xmax - 10, xmin + 160);
+    return [ymin, xmin, ymax, xmax];
+  }
+  // 右の図: 左が本文列。ページ右端は維持。切れ端は1回だけ落とす
+  if (looksLikeTextColumnBesideInset(stem, exp) || looksLikeLeftStemColumn(stem)) {
+    const after = (textColumnRightEdge(stem) ?? 640) + INSET_INNER_GUTTER;
+    if (xmax - after >= 170) xmin = Math.max(xmin, after);
+  } else if (xmax - xmin >= 200 && Math.abs(xmin - RIGHT_INSET_XMIN) <= 8) {
+    xmin = Math.min(xmin + INSET_INNER_GUTTER, xmax - 170);
+  }
+  return [ymin, xmin, ymax, xmax];
+}
+
+/**
+ * Gemini の細い帯を、設問横の左右カラムで「図1枚分」に直す。
+ * 親図へは戻さず、次の小問まで伸ばさない。ページ右の空きまでは広げない。
+ */
+export function forceInsetColumnBox(box, options = {}) {
+  const n = usableGeminiBox(box);
+  const place = insetPlaceOf(n, options);
+  if (place === "left") {
+    if (!n) return [180, 36, 460, 380];
+    const ymin = clamp(n[0] - 24, 8, 700);
+    const ymax = clamp(Math.max(n[2] + 52, ymin + 200), ymin + 160, 760);
+    return [ymin, 36, ymax, 380];
+  }
+  const floor = Number.isFinite(Number(options.floor)) ? Number(options.floor) : 318;
+  const h = n ? n[2] - n[0] : 0;
+  const w = n ? n[3] - n[1] : 0;
+  const columnStart = rightInsetColumnStart(options.stem, n);
+  // すでに図1枚分なら左右を再拡張しない（本文側の切れ端整理を戻さない）
+  if (h >= 186 && h <= 230 && w >= 180 && n[1] >= 480) {
+    const xmax = clamp(n[3], n[1] + 200, 990);
+    return [n[0], n[1], n[2], xmax];
+  }
+  const sliver = h > 0 && h < 140;
+  const onParentEdge = sliver && n[0] <= floor + 16;
+  const ymin = sliver
+    ? clamp(Math.max(n[0] + (onParentEdge ? 12 : 0), floor + 8), 300, 400)
+    : clamp(Math.max(n ? n[0] - 16 : 336, floor), 300, 400);
+  const down = sliver ? 120 : 52;
+  const ymaxCap = sliver ? ymin + 220 : ymin + 240;
+  const ymax = clamp(Math.max(n ? n[2] + down : 0, ymin + INSET_MIN_HEIGHT), ymin + 160, ymaxCap);
+  const xmin = columnStart;
+  const gemXmax = n ? n[3] : xmin + 280;
+  const pageCap = RIGHT_INSET_XMIN + INSET_MAX_WIDTH;
+  const xmax = sliver
+    ? clamp(
+        gemXmax >= 950 ? Math.min(gemXmax, pageCap) : Math.max(gemXmax, xmin + 240),
+        xmin + 240,
+        960,
+      )
+    : clamp(
+        Math.min(Math.max(gemXmax + 16, xmin + 260), gemXmax >= 950 ? pageCap : 990),
+        xmin + 240,
+        990,
+      );
+  return [ymin, xmin, ymax, xmax];
+}
+
+export function looksLikeInsetCrop(box, options = {}) {
+  if (options.asInset === true) return true;
+  const n = usableGeminiBox(box);
+  if (!n) return false;
+  const w = n[3] - n[1];
+  const h = n[2] - n[0];
+  if (h < 70 || w < 80 || w > 540) return false;
+  return n[1] >= 340 || n[3] <= 440;
+}
+
+/**
+ * 親図クロップからリード文帯を外す（テキスト判定なし）。
+ * 短い箱はリード終端までだけ上げ、図ラベルを残す。
+ */
+export function raiseCropBelowLead(box) {
+  const b = usableGeminiBox(box);
+  if (!b) return null;
+  if (b[0] >= LEAD_BAND_END) return b;
+  const minRemain = 56;
+  // 2行リードを図に残さない。短い箱はラベル帯までしか上げない
+  const target = b[0] < 100 && b[2] - b[0] >= 220 ? 176 : LEAD_BAND_END;
+  const raised = Math.min(target, b[2] - minRemain);
+  if (raised > b[0] + 8 && b[2] - raised >= 50) return [raised, b[1], b[2], b[3]];
+  return b;
 }
 
 /** 図・表の切り抜きを広げる。親図は注釈・左右端優先、表は行全体が入るよう厚め
@@ -92,32 +316,85 @@ export function expandFigureGeminiBox(box, pad = FIGURE_PAD, options = {}) {
   const xmax = nums[3];
   const h = Math.max(1, ymax - ymin);
   const w = Math.max(1, xmax - xmin);
-  // ページ下半分の箱、または明示的な表指定
-  const lowerTable =
-    options.asTable === true || ymin >= 520 || (ymin >= 450 && h <= 380);
-  const topFigure = !lowerTable && ymin <= 240;
-  const sidePad = lowerTable ? 0.04 : FIGURE_SIDE_PAD;
-  const topPad = lowerTable ? 0 : FIGURE_TOP_PAD;
-  const bottomPad = lowerTable ? 0.04 : topFigure ? 0.04 : FIGURE_BOTTOM_PAD;
-  const dyTop = lowerTable ? 0 : Math.max(h * topPad, 18);
+  // 表は asTable のときだけ。位置だけで表扱いするとページ下の図の上が欠ける
+  const lowerTable = options.asTable === true;
+  const inset = looksLikeInsetCrop(nums, options) && !lowerTable;
+  const topFigure = !lowerTable && !inset && ymin <= 240;
+  const tightInset = inset && (h < 160 || w < 220);
+  const sidePad = lowerTable || inset ? 0.04 : FIGURE_SIDE_PAD;
+  const topPad = lowerTable || inset ? 0 : FIGURE_TOP_PAD;
+  const bottomPad = lowerTable || inset ? 0.04 : topFigure ? 0.04 : FIGURE_BOTTOM_PAD;
+  const dyTop = lowerTable
+    ? 0
+    : inset
+      ? tightInset
+        ? Math.max(h * 0.4, 72)
+        : ymin >= 300
+          ? Math.min(Math.max(h * 0.08, 12), 20)
+          : Math.max(h * 0.2, 48)
+      : topFigure
+        ? ymin <= LEAD_BAND_END
+          ? 0
+          : Math.min(Math.max(0, ymin - LEAD_BAND_END), 12)
+        : ymin < LEAD_BAND_END - 4
+          ? 0
+          : Math.max(h * topPad, 18);
   const dyBottom = Math.max(
     h * bottomPad,
-    lowerTable ? 20 : topFigure ? 18 : FIGURE_CAPTION_ROOM,
+    lowerTable
+      ? 20
+      : inset
+        ? tightInset
+          ? Math.max(h * 0.55, 96)
+          : Math.max(h * 0.18, 48)
+        : FIGURE_CAPTION_ROOM,
   );
-  const dxLeft = Math.max(w * sidePad, lowerTable ? 16 : 24);
+  const rightCol = inset && xmin >= 500;
+  const leftCol = inset && xmax <= 500;
+  const dxLeft = Math.max(
+    w * sidePad,
+    lowerTable
+      ? 12
+      : rightCol
+        ? Math.max(w * 0.32, xmin - RIGHT_INSET_XMIN, 72)
+        : inset
+          ? Math.max(w * 0.08, 18)
+          : 24,
+  );
   const dxRight = lowerTable
-    ? Math.max(w * 0.04, 16)
-    : Math.max(w * (topFigure ? FIGURE_PARENT_RIGHT_PAD : FIGURE_SIDE_PAD), topFigure ? FIGURE_PARENT_RIGHT_MIN : 28);
-  const xmaxCap = lowerTable ? 970 : topFigure ? FIGURE_PARENT_XMAX : 982;
+    ? Math.max(w * 0.08, 16)
+    : rightCol
+      ? Math.max(w * 0.2, 56)
+      : leftCol
+        ? Math.max(w * 0.03, 6)
+        : inset
+          ? Math.max(w * 0.08, 16)
+          : Math.max(w * (topFigure ? FIGURE_PARENT_RIGHT_PAD : FIGURE_SIDE_PAD), topFigure ? FIGURE_PARENT_RIGHT_MIN : 28);
+  const xmaxCap = lowerTable ? 970 : rightCol ? FIGURE_PARENT_XMAX : inset ? 970 : topFigure ? FIGURE_PARENT_XMAX : 982;
   let nextYmax = clamp(ymax + dyBottom, 0, 1000);
   if (topFigure) {
-    // Gemini が (1) 本文まで箱に入れても、親図は手順注釈までで止める
     nextYmax = Math.min(nextYmax, ymax > 520 ? 490 : PARENT_FIGURE_YMAX);
+    if (ymax <= 350) nextYmax = Math.min(nextYmax, Math.max(ymax + 12, 350), 360);
   }
-  // 紙の外（机・余白）まで広げない。親図の右だけ目盛が残るよう厚くする
-  const nextYmin = clamp(Math.max(ymin - dyTop, lowerTable ? ymin : 8), 0, 1000);
-  const nextXmin = clamp(Math.max(xmin - dxLeft, 18), 0, 1000);
-  const nextXmax = clamp(Math.min(xmax + dxRight, xmaxCap), 0, 1000);
+  const nextYmin = clamp(
+    Math.max(ymin - dyTop, lowerTable ? ymin : inset ? Math.max(8, ymin - dyTop) : 8),
+    0,
+    1000,
+  );
+  // 横長の親図だけ左ラベル用に余白。右寄せの図は左端へ引っ張らない
+  let nextXmin = clamp(
+    topFigure && w >= 550
+      ? Math.min(Math.max(xmin - dxLeft, 18), 36)
+      : rightCol
+        ? Math.max(xmin - dxLeft, RIGHT_INSET_XMIN)
+        : Math.max(xmin - dxLeft, inset ? 8 : 18),
+    0,
+    1000,
+  );
+  let nextXmax = clamp(Math.min(xmax + dxRight, xmaxCap), 0, 1000);
+  if (inset && !lowerTable) {
+    return forceInsetColumnBox(nums, options);
+  }
   const next = [nextYmin, nextXmin, nextYmax, nextXmax];
   if (!(next[2] > next[0]) || !(next[3] > next[1])) return nums;
   return next;
@@ -142,11 +419,23 @@ export function clipFigureBottomBeforeBelow(expanded, original, belowBox, gap = 
   if (orig && below) {
     const origH = Math.max(1, orig[2] - orig[0]);
     const belowTop = Math.min(below[0], below[2]);
-    if (belowTop >= orig[0] + origH * 0.28 && belowTop <= orig[2] + 240) {
+    // 解答欄だけが遠くにある＝あいだに (1) 本文がある。親図を解答まで伸ばさない
+    if (
+      looksLikeAnswerSlot(below) &&
+      topFigure &&
+      belowTop - orig[2] > 120 &&
+      origH < 280
+    ) {
+      stop = Math.min(stop, orig[2] + 16, 360);
+    } else if (belowTop >= orig[0] + origH * 0.28 && belowTop <= orig[2] + 240) {
       const captionEnd = Math.min(orig[2] + FIGURE_CAPTION_ROOM, PARENT_FIGURE_YMAX);
       const gapBelowFigure = belowTop - orig[2];
       if (gapBelowFigure > FIGURE_CAPTION_ROOM + 16) {
         stop = Math.min(stop, captionEnd, belowTop - gap);
+      } else if (origH < 260) {
+        // 設問が近いときはねん土分だけ。余白があると (1) 本文まで親図に入る
+        const room = Math.max(12, Math.min(FIGURE_CAPTION_ROOM, belowTop - orig[2] - 6));
+        stop = Math.min(stop, orig[2] + room, belowTop - gap, PARENT_FIGURE_YMAX);
       } else {
         stop = Math.min(stop, belowTop - gap - FIGURE_STEM_CLEARANCE);
       }
@@ -181,6 +470,9 @@ export function prepareParentFigureBox(parent, sub, gap = 8) {
   const s = usableGeminiBox(sub);
   if (!s) return p;
   if (s[0] >= p[2] + 36) return p;
+  const overlapX = Math.min(p[3], s[3]) - Math.max(p[1], s[1]);
+  // 右／左カラムの差し込みは親の下ではなく横。ねん土まで残す
+  if (overlapX < (p[3] - p[1]) * 0.45) return p;
   const origH = Math.max(1, p[2] - p[0]);
   const expandBottom = Math.max(origH * FIGURE_BOTTOM_PAD, FIGURE_CAPTION_ROOM);
   const limit = s[0] - gap - expandBottom;
@@ -423,14 +715,35 @@ export function figureAnswerMasks(cropGemini, bboxGemini, options = {}) {
 export function planExpandedFigureCrop(cropBox, answerBBox, options = {}) {
   const raw = usableGeminiBox(cropBox);
   if (!raw) return { cropGemini: null, masks: [] };
-  const expandOpts = options.asTable ? { asTable: true } : {};
+  const expandOpts = options.asTable ? { asTable: true } : options.asInset ? { asInset: true } : {};
   let expanded = expandFigureGeminiBox(raw, FIGURE_PAD, expandOpts) ?? raw;
-  if (options.clipBottomBeforeStem !== false && !options.asTable) {
+  if (options.asInset) {
+    expanded = forceInsetColumnBox(raw, { ...options, stem: answerBBox });
+    expanded = clipInsetLeftAfterStem(expanded, answerBBox) ?? expanded;
+    const beforeWindow = expanded;
+    expanded = clipInsetToStemWindow(expanded, answerBBox) ?? expanded;
+    const windowed = expanded[2] < beforeWindow[2] - 4;
+    expanded =
+      clipInsetBottomBeforeAnswer(expanded, raw, answerBBox, options.bottomGap ?? 8) ?? expanded;
+    expanded = trimInsetSliverEdges(expanded, raw) ?? expanded;
+    expanded =
+      trimInsetNeighborEdges(expanded, answerBBox, {
+        place: insetPlaceOf(expanded, options),
+        keepBottom: windowed,
+      }) ?? expanded;
+  } else if (options.clipBottomBeforeStem !== false && !options.asTable) {
     expanded =
       clipFigureBottomBeforeBelow(expanded, raw, answerBBox, options.bottomGap ?? 10) ?? expanded;
   }
   const preserveExtent = options.preserveExtent !== false;
-  const planned = figureAnswerMasks(expanded, answerBBox ?? null, { preserveExtent });
+  // 設問本文・リードとの重なりを白マスクすると左上に帯が出る。解答欄だけ隠す
+  const maskAnswer =
+    options.asInset || options.asTable
+      ? null
+      : looksLikeAnswerSlot(answerBBox)
+        ? answerBBox
+        : null;
+  const planned = figureAnswerMasks(expanded, maskAnswer ?? null, { preserveExtent });
   const cropGemini = planned.crop ? normalizedBoxToGemini(planned.crop) : expanded;
   return { cropGemini, masks: planned.masks ?? [] };
 }

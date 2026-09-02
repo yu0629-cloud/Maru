@@ -8,7 +8,7 @@ import { signedStorageUrl } from "@/src/lib/storage/signed-url";
 import { shouldUseRemote } from "@/src/lib/backend";
 import { maruLog, maruStep } from "@/src/lib/debug/maruLog";
 import { t } from "@/src/i18n";
-import { isRawScanSourceUri, toFileUri, cropFigureToBase64 } from "@/src/lib/files/scan-image";
+import { isRawScanSourceUri, isFullPageScanSource, toFileUri, cropFigureToBase64 } from "@/src/lib/files/scan-image";
 import { isIncorrectForPrint, printProblemFromReview } from "@/src/features/print/from-reviews";
 import {
   buildPrintHtml,
@@ -16,12 +16,16 @@ import {
   figureCropBoxOf,
   inferVisualType,
   enrichPrintFigureBoxes,
+  benefitsFromParentFigure,
   needsDataTableVisual,
+  needsInsetFigure,
   resolveParentFigureBox,
   resolveSubFigureBox,
+  resolveInsetFigureBox,
   earliestStemBelowParent,
   styleToGridType,
   subFigureBoxOf,
+  PRINT_CROP_REV,
 } from "@/src/features/print/html";
 import type { PrintDocumentInput, PrintProblem } from "@/src/features/print/html";
 import { usableGeminiBox } from "@/src/features/print/lib/bbox.mjs";
@@ -166,8 +170,38 @@ function asFigurePayload(dataUri: string) {
   return { figureImageSrc: dataUri, figureBase64: dataUri, imageSrc: dataUri };
 }
 
+/** 採点時の古い切り抜き JPEG を印字に使わない */
+function stripStoredFigureSrcs(problem: PrintProblem): PrintProblem {
+  return {
+    ...problem,
+    figureImageSrc: "",
+    figureBase64: "",
+    parentFigureSrc: "",
+    parentFigureBase64: "",
+    subFigureSrc: "",
+    subFigureBase64: "",
+    imageSrc: "",
+    figure_image_src: "",
+    figure_base64: "",
+    parent_figure_src: "",
+    parent_figure_base64: "",
+    sub_figure_src: "",
+    sub_figure_base64: "",
+  } as PrintProblem;
+}
+
+function pickFullPageSource(problem: PrintProblem, signedOriginal: string) {
+  const localUri = String((problem as PrintProblem & { localUri?: string }).localUri ?? "").trim();
+  for (const uri of [signedOriginal, localUri, problem.originalImageSrc]) {
+    const value = String(uri ?? "").trim();
+    if (isFullPageScanSource(value)) return value;
+    if (isRawScanSourceUri(value) && !value.startsWith("data:image/")) return value;
+  }
+  return "";
+}
+
 export async function resolvePrintImageUrls(problems: PrintProblem[]): Promise<PrintProblem[]> {
-  const enriched = enrichPrintFigureBoxes(problems);
+  const enriched = enrichPrintFigureBoxes(problems.map(stripStoredFigureSrcs));
   return Promise.all(
     enriched.map(async (problem) => {
       if (problem.mediaExpired) {
@@ -189,28 +223,34 @@ export async function resolvePrintImageUrls(problems: PrintProblem[]): Promise<P
         ? await signedStorageUrl(STORAGE_BUCKETS.originals, problem.originalPath)
         : "";
       const needsTable = needsDataTableVisual(problem);
-      const subBox = resolveSubFigureBox(problem) ?? subFigureBoxOf(problem);
+      const needsInset = needsInsetFigure(problem);
       const parentBox = resolveParentFigureBox(problem);
+      const stemBox =
+        earliestStemBelowParent(enriched, parentBox, problem) ?? usableGeminiBox(problem.bbox) ?? null;
+      const subBox = needsTable
+        ? resolveSubFigureBox(problem) ?? subFigureBoxOf(problem)
+        : needsInset
+          ? resolveInsetFigureBox({
+              ...problem,
+              parentFigureBox: parentBox,
+              parent_figure_box: parentBox,
+              bbox: stemBox,
+            }) ?? subFigureBoxOf(problem)
+          : null;
       const legacyBox = !parentBox && !subBox ? figureCropBoxOf(problem) : null;
       let visual = inferVisualType(problem);
-      if ((needsTable || parentBox || subBox || legacyBox) && visual !== "passage_based") {
+      const shouldRecrop =
+        visual === "has_figure" ||
+        needsTable ||
+        needsInset ||
+        Boolean(parentBox || subBox || legacyBox) ||
+        benefitsFromParentFigure(problem);
+      if (shouldRecrop && visual !== "passage_based") {
         visual = "has_figure";
       }
       if (visual === "has_figure") {
-        // 古い切り抜きキャッシュを捨て、生スキャンから取り直す
-        const cleared = {
-          ...problem,
-          figureImageSrc: "",
-          figureBase64: "",
-          parentFigureSrc: "",
-          parentFigureBase64: "",
-          subFigureSrc: "",
-          subFigureBase64: "",
-          imageSrc: "",
-        };
-        const rawSource = [problem.originalImageSrc, signedOriginal]
-          .map((uri) => String(uri ?? "").trim())
-          .find((uri) => isRawScanSourceUri(uri));
+        const cleared = stripStoredFigureSrcs(problem);
+        const rawSource = pickFullPageSource(problem, signedOriginal);
         maruLog("figure", "resolvePrintImageUrls", {
           id: problem.id,
           visual,
@@ -230,6 +270,7 @@ export async function resolvePrintImageUrls(problems: PrintProblem[]): Promise<P
             suffix: string,
             asTable = false,
             clipBelow: unknown = null,
+            asInset = false,
           ) => {
             if (!box || !rawSource) return "";
             return (
@@ -241,6 +282,7 @@ export async function resolvePrintImageUrls(problems: PrintProblem[]): Promise<P
                 answerBBox: asTable ? null : clipBelow,
                 visualType: "has_figure",
                 asTable,
+                asInset,
               })) ?? ""
             );
           };
@@ -251,10 +293,21 @@ export async function resolvePrintImageUrls(problems: PrintProblem[]): Promise<P
           const subTop = usableGeminiBox(subBox);
           const clipTop = (box: typeof parentClipBelow) =>
             box ? Math.min(box[0], box[2]) : Infinity;
-          const clipBelow =
-            clipTop(parentClipBelow) <= clipTop(subTop) ? parentClipBelow ?? subTop : subTop ?? parentClipBelow;
+          // 表は親図の下なので表上端でも切る。差し込み図は設問横なので親図の下端クリップに使わない
+          const clipBelow = needsTable
+            ? clipTop(parentClipBelow) <= clipTop(subTop)
+              ? parentClipBelow ?? subTop
+              : subTop ?? parentClipBelow
+            : parentClipBelow;
           const parentSrc = await cropOne(parentBox || legacyBox, "p", false, clipBelow);
-          const subSrc = await cropOne(subBox, "s", true, null);
+          const insetAnswer = needsInset && !needsTable ? usableGeminiBox(problem.bbox) : null;
+          const subSrc = await cropOne(
+            subBox,
+            "s",
+            needsTable,
+            insetAnswer,
+            needsInset && !needsTable,
+          );
           const printable = parentSrc.startsWith("data:image/")
             ? parentSrc
             : subSrc.startsWith("data:image/")
@@ -267,6 +320,7 @@ export async function resolvePrintImageUrls(problems: PrintProblem[]): Promise<P
           return {
             ...cleared,
             visualType: "has_figure",
+            printFigureRev: PRINT_CROP_REV,
             ...asFigurePayload(printable),
             parentFigureBox: parentBox ?? problem.parentFigureBox,
             subFigureBox: subBox ?? problem.subFigureBox,
@@ -274,7 +328,7 @@ export async function resolvePrintImageUrls(problems: PrintProblem[]): Promise<P
             parentFigureBase64: parentSrc.startsWith("data:image/") ? parentSrc : "",
             subFigureSrc: subSrc.startsWith("data:image/") ? subSrc : "",
             subFigureBase64: subSrc.startsWith("data:image/") ? subSrc : "",
-            originalImageSrc: await toPrintableImageSrc(signedOriginal || problem.originalImageSrc || ""),
+            originalImageSrc: problem.originalImageSrc || signedOriginal || "",
           };
         } catch (error) {
           maruLog("figure", "figure crop skip", {
@@ -298,7 +352,7 @@ const A4_PRINT_OPTIONS = {
 };
 
 export async function generatePrintPdf(input: PrintDocumentInput): Promise<GeneratedPrint> {
-  const problems = await resolvePrintImageUrls(input.problems);
+  const problems = await resolvePrintImageUrls(input.problems.map(stripStoredFigureSrcs));
   const html = buildPrintHtml({ ...input, problems });
   if (Platform.OS === "web") {
     return { html };

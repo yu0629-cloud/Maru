@@ -99,6 +99,8 @@ const {
   parseExtractProblems,
   placeholderBBox,
   answersMatchStrict,
+  canonicalizeChoiceAnswer,
+  snapBBoxToAnswerSlot,
 } = await import(
   pathToFileURL(join(root, "supabase/functions/grade-scan/hybrid-grade.mjs")).href,
 );
@@ -282,6 +284,108 @@ const copiedTruth = gradeExtractedProblems([
 assert.equal(copiedTruth.problems[0].is_correct, false);
 pass("図の真の正解と手書きが違えば不正解。一部選択も不正解");
 
+const scienceOptions = "① 空気がなくなる ② 空気の成分が変わる ③ 変わらない";
+assert.equal(canonicalizeChoiceAnswer("空気がなくなる", scienceOptions), "1");
+assert.equal(canonicalizeChoiceAnswer("1", scienceOptions), "1");
+const shortOptions = "① 大 ② 小 ③ 同じ";
+assert.equal(canonicalizeChoiceAnswer("大", shortOptions, "circle_selection"), "1");
+assert.equal(canonicalizeChoiceAnswer("変わらない", scienceOptions, "circle_selection"), "3");
+assert.equal(canonicalizeChoiceAnswer("なる", scienceOptions, "circle_selection"), "なる");
+assert.equal(canonicalizeChoiceAnswer("大", shortOptions), "大");
+const scienceWrongCopiedBody = gradeExtractedProblems([
+  {
+    problem_index: "(2)",
+    question_text: "(1)の結果からわかることを、次の①〜③から選び、番号を書きましょう。",
+    options_text: scienceOptions,
+    student_answer: "空気がなくなる",
+    correct_answer: "2",
+    ground_truth: "2",
+    type: "text",
+    bbox: [220, 80, 255, 220],
+  },
+]);
+assert.equal(scienceWrongCopiedBody.problems[0].student_answer, "1");
+assert.equal(scienceWrongCopiedBody.problems[0].is_correct, false);
+const sciencePrintedLabel = gradeExtractedProblems([
+  {
+    problem_index: "2(1)",
+    question_text: "Aの器具の名前を書きましょう。",
+    student_answer: "気体採取器",
+    correct_answer: "気体採取器",
+    ground_truth: "気体採取器",
+    type: "text",
+    bbox: [520, 420, 720, 900],
+    parent_figure_box: [500, 380, 780, 960],
+  },
+]);
+assert.equal(sciencePrintedLabel.problems[0].is_correct, false);
+const snappedSlot = snapBBoxToAnswerSlot([520, 420, 720, 900], [500, 380, 780, 960], null);
+assert.ok(snappedSlot[2] - snappedSlot[0] <= 40);
+assert.ok(snappedSlot[3] < 380);
+const scienceHandwrittenOk = gradeExtractedProblems([
+  {
+    problem_index: "2(1)",
+    question_text: "Aの器具の名前を書きましょう。",
+    student_answer: "気体検知管",
+    correct_answer: "気体検知管",
+    ground_truth: "気体検知管",
+    type: "text",
+    bbox: [610, 80, 648, 280],
+  },
+]);
+assert.equal(scienceHandwrittenOk.problems[0].is_correct, true);
+const circledChoice = gradeExtractedProblems([
+  {
+    problem_index: "1-(2)",
+    question_text: "(1)の結果からわかることを、次の①〜③から選びなさい。",
+    options_text: scienceOptions,
+    student_answer: "2",
+    correct_answer: "2",
+    ground_truth: "2",
+    type: "text",
+    answer_type: "circle_selection",
+    is_blank: false,
+    bbox: [240, 120, 290, 210],
+    parent_figure_box: [80, 400, 420, 960],
+  },
+]);
+assert.equal(circledChoice.problems[0].is_correct, true);
+assert.equal(circledChoice.problems[0].answer_type, "circle_selection");
+assert.deepEqual(circledChoice.problems[0].bbox, [240, 120, 290, 210]);
+const circledShortBody = gradeExtractedProblems([
+  {
+    problem_index: "1-(2)",
+    question_text: "次の①〜③から選びなさい。",
+    options_text: scienceOptions,
+    student_answer: "変わらない",
+    correct_answer: "3",
+    ground_truth: "3",
+    type: "text",
+    answer_type: "circle_selection",
+    is_blank: false,
+    bbox: [300, 120, 340, 260],
+  },
+]);
+assert.equal(circledShortBody.problems[0].student_answer, "3");
+assert.equal(circledShortBody.problems[0].is_correct, true);
+const blankSlot = gradeExtractedProblems([
+  {
+    problem_index: "1-(1)",
+    question_text: "(1) 右の図のようになりました。",
+    student_answer: null,
+    is_blank: true,
+    answer_type: "none",
+    correct_answer: "1",
+    ground_truth: "1",
+    type: "text",
+    bbox: [180, 80, 215, 200],
+  },
+]);
+assert.equal(blankSlot.problems[0].is_blank, true);
+assert.equal(blankSlot.problems[0].student_answer, "");
+assert.equal(blankSlot.problems[0].is_correct, false);
+pass("手書き解答欄以外の印刷ラベル・選択肢本文は答案にしない");
+
 const aliasExtracted = parseExtractProblems({
   questions: [
     {
@@ -382,7 +486,7 @@ assert.doesNotMatch(geminiSrc, /x-goog-api-key/);
 pass("Gemini 呼び出しが REST 直叩き・既定は 3.5 flash-lite");
 
 const promptSrc = readFileSync(join(root, "supabase/functions/grade-scan/prompt.ts"), "utf8");
-assert.match(promptSrc, /problem_index, question_text, ground_truth, student_answer, is_correct, correct_answer, type, topic, bbox, visual_type, crop_box, question_unit/);
+assert.match(promptSrc, /problem_index, question_text, ground_truth, student_answer, answer_type, is_blank, is_correct, correct_answer, type, topic, bbox, visual_type, crop_box, question_unit/);
 assert.match(promptSrc, /has_figure/);
 assert.match(promptSrc, /crop_box/);
 assert.match(promptSrc, /question_unit/);
@@ -439,9 +543,15 @@ assert.match(promptSrc, /130°/);
 assert.match(promptSrc, /1,3/);
 assert.doesNotMatch(promptSrc, /採点・思考・解説は禁止/);
 assert.match(promptSrc, /0 \+ 7 =/);
-assert.match(schemaBlock, /Answer slot immediately to the right/);
+assert.match(schemaBlock, /hand-drawn circle/);
+assert.match(schemaBlock, /circle_selection/);
+assert.match(promptSrc, /手書き解答/);
+assert.match(promptSrc, /囲み型/);
+assert.match(promptSrc, /circle_selection/);
+assert.match(promptSrc, /気体採取器/);
+assert.match(promptSrc, /空気の成分が変わる/);
 assert.match(schemaBlock, /NEVER only a question number/);
-assert.match(schemaBlock, /circled or leading/);
+assert.match(schemaBlock, /1-\(1\)/);
 assert.match(promptSrc, /【抽出例】/);
 assert.match(promptSrc, /⑯/);
 assert.match(promptSrc, /2 \+ 4 =/);
@@ -499,7 +609,11 @@ pass("プリント教科は Gemini 値を正規化し、欠落時は other に�
 
 assert.match(schemaBlock, /subject/);
 assert.match(schemaBlock, /enum: SUBJECT_CODES/);
-assert.match(schemaBlock, /required: \["subject", "problems"\]/);
+assert.match(schemaBlock, /required: \["subject", "problems", "detected_child_id", "detected_child_name", "confidence_reason"\]/);
+assert.match(promptSrc, /detected_child_id/);
+assert.match(promptSrc, /formatChildrenRoster/);
+const matchChildSrc = readFileSync(join(root, "supabase/functions/grade-scan/match-child.mjs"), "utf8");
+assert.match(matchChildSrc, /子ども振り分け/);
 assert.match(promptSrc, /subject はプリント全体の教科/);
 assert.match(promptSrc, /spelling_phonics/);
 assert.match(promptSrc, /world_languages/);
@@ -556,9 +670,8 @@ assert.match(validateSrc, /normalizeOcrText/);
 assert.match(validateSrc, /inferTableBoxBelow/);
 assert.match(validateSrc, /mentionsDataTable/);
 const ocrTextSrc = readFileSync(join(root, "supabase/functions/grade-scan/ocr-text.mjs"), "utf8");
-assert.match(ocrTextSrc, /下のようになりました/);
-assert.match(ocrTextSrc, /実験の結果/);
-assert.match(ocrTextSrc, /あった方が解きやすい/);
+assert.match(ocrTextSrc, /表にまとめると/);
+assert.match(ocrTextSrc, /mentionsDataTable/);
 assert.match(persistSrc, /options_text:/);
 assert.match(
   readFileSync(join(root, "supabase/migrations/20240827000021_problem_topic.sql"), "utf8"),
@@ -589,5 +702,36 @@ const compressFn = compressSrc.slice(
 );
 assert.doesNotMatch(compressFn, /readAsStringAsync/);
 pass("圧縮は長辺1280px・JPEG 0.6 で確定し fallback read しない");
+
+const matchChild = await import(pathToFileURL(join(root, "supabase/functions/grade-scan/match-child.mjs")).href);
+const yui = { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", name: "ゆい", grade_code: "e6" };
+const taro = { id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", name: "たろう", grade_code: "e4" };
+assert.equal(matchChild.normalizePersonName("ユイ"), "ゆい");
+assert.deepEqual(matchChild.extractGradeCodes("小学6年生"), ["e6"]);
+assert.equal(
+  matchChild.resolveChildDetection({
+    children: [yui, taro],
+    fallbackChildId: taro.id,
+    hint: { detected_child_id: "", detected_child_name: "ゆい", confidence_reason: "名前欄に『ゆい』" },
+  }).childId,
+  yui.id,
+);
+assert.equal(
+  matchChild.resolveChildDetection({
+    children: [yui, taro],
+    fallbackChildId: yui.id,
+    hint: { detected_child_id: "", detected_child_name: "", confidence_reason: "学年が小4" },
+  }).childId,
+  taro.id,
+);
+assert.equal(
+  matchChild.resolveChildDetection({
+    children: [yui, taro],
+    fallbackChildId: taro.id,
+    hint: { detected_child_id: "unknown", detected_child_name: "", confidence_reason: "" },
+  }).fallback,
+  true,
+);
+pass("名前欄と学年で子どもを照合し、不明なら選択中へ戻す");
 
 console.log("\nAll grade-scan contract checks passed.");

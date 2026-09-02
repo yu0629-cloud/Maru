@@ -6,10 +6,10 @@ import {
   PROBLEM_TYPE_LABELS,
 } from "./problem-types.mjs";
 import { isIncorrectForPrint, isQuestionNumberOnly, stripLatexDollars, dedupePrintProblems } from "./from-reviews.mjs";
-import { expandFigureGeminiBox, figureAnswerMasks, geminiBBoxToNormalizedBox, intersectNormalized, planExpandedFigureCrop, prepareParentFigureBox } from "./bbox.mjs";
+import { expandFigureGeminiBox, figureAnswerMasks, geminiBBoxToNormalizedBox, intersectNormalized, planExpandedFigureCrop, prepareParentFigureBox, usableGeminiBox } from "./bbox.mjs";
 import { normalizeOcrText } from "./ocr-text.mjs";
 import { figureCropBoxOf, figureDataSrcOf, figureImageSrcOf, inferVisualType, parentContextOf, parentFigureBoxOf, parentFigureSrcOf, passageTextOf, contextTextOf, optionsTextOf, subFigureBoxOf, subFigureSrcOf } from "./visual.mjs";
-import { needsDataTableVisual, resolveSubFigureBox, earliestStemBelowParent } from "./figure-boxes.mjs";
+import { needsDataTableVisual, needsInsetFigure, figurePlacementOf, benefitsFromParentFigure, resolveSubFigureBox, resolveInsetFigureBox, resolveParentFigureBox, sameFigureFamily, preferParentFigureBox, earliestStemBelowParent } from "./figure-boxes.mjs";
 import {
   resolveQuestionNumber,
   stripLeadingQuestionNumber,
@@ -22,6 +22,7 @@ export { chooseAnswerStyle, problemsPerPage, styleToGridType, ANSWER_STYLE_LABEL
 export {
   resolveQuestionNumber,
   stripLeadingQuestionNumber,
+  referencedPartTokens,
   formatSquareNumber,
   formatRoundNumber,
   matchLeadingQuestionNumber,
@@ -51,6 +52,15 @@ export {
   clipFigureBottomBeforeBelow,
   PARENT_FIGURE_YMAX,
   looksLikeTopParentFigure,
+  looksLikeInsetCrop,
+  looksLikeAnswerSlot,
+  looksLikeLeftStemColumn,
+  clipInsetBottomBeforeAnswer,
+  clipInsetLeftAfterStem,
+  forceInsetColumnBox,
+  clipInsetToStemWindow,
+  trimInsetSliverEdges,
+  trimInsetNeighborEdges,
 } from "./bbox.mjs";
 
 export const WORKSHEET_PER_PAGE = 6;
@@ -60,6 +70,10 @@ export const FIGURE_PARTS_PER_SHEET = 2;
 /** A4 から左右余白 12mm を除いた本文幅・高さ */
 export const A4_CONTENT_WIDTH_MM = 186;
 export const A4_CONTENT_HEIGHT_MM = 273;
+/** 「右の図／左の図」を置く枠。切り抜き画像をこの枠に合わせて拡大縮小する */
+export const INSET_SLOT_OCCUPANCY = { widthPct: 32, heightMm: 48 };
+/** お直し図の切り抜き世代。PDF に書いて、古いバンドルのまま印字していないか確認する */
+export const PRINT_CROP_REV = 59;
 
 const DUMMY_QUESTION = /計算\s*\(\s*1\s*\)|計算ブロック|問計算|ブロック\d*|計算ドリル|^大問\s*\d+$|^漢字\s*\d+$|^読解\s*\d+$|^理科\s*\d+$|^適性検査$|^作図$|^文章題$|^計算$|^適性$/;
 
@@ -95,6 +109,7 @@ export function isRasterImage(src) {
 }
 
 export function occupancyFromBox(gemini, options = {}) {
+  if (options.asInset) return { ...INSET_SLOT_OCCUPANCY };
   const padded = expandFigureGeminiBox(gemini, undefined, options) ?? gemini;
   if (!padded) return { widthPct: 100, heightMm: 60 };
   const ymin = Math.min(padded[0], padded[2]);
@@ -102,11 +117,14 @@ export function occupancyFromBox(gemini, options = {}) {
   const ymax = Math.max(padded[0], padded[2]);
   const xmax = Math.max(padded[1], padded[3]);
   const heightRatio = Math.min(1, Math.max(0.08, (ymax - ymin) / 1000));
-  const widthRatio = Math.min(1, Math.max(0.2, (xmax - xmin) / 1000));
+  const minWidth = options.asInset ? 0.12 : 0.2;
+  const widthRatio = Math.min(1, Math.max(minWidth, (xmax - xmin) / 1000));
   const rawHeight = heightRatio * A4_CONTENT_HEIGHT_MM;
-  const heightMm = options.asTable ? Math.min(rawHeight, 92) : Math.min(rawHeight, 68);
+  const heightCap = options.asTable ? 92 : options.asInset ? 54 : 68;
+  const heightMm = Math.min(rawHeight, heightCap);
+  const widthPct = Math.round(widthRatio * 1000) / 10;
   return {
-    widthPct: Math.round(widthRatio * 1000) / 10,
+    widthPct,
     heightMm: Math.round(heightMm * 10) / 10,
   };
 }
@@ -267,6 +285,8 @@ function toWorksheetItem(problem, text, number, kind, extra = {}) {
     subMasks: extra.subMasks ?? [],
     shareScan: extra.shareScan ?? "",
     shareCrop: extra.shareCrop ?? null,
+    printRole: extra.printRole || problem?.printRole || "",
+    correctAnswer: extra.correctAnswer ?? problem?.correctAnswer ?? problem?.correct_answer ?? "",
   };
 }
 
@@ -308,8 +328,21 @@ function normalizeFigureContext(value) {
     .normalize("NFKC");
 }
 
+function figureItemFamilyInput(item) {
+  return {
+    questionText: [item?.stem, ...(Array.isArray(item?.parts) ? item.parts.map((part) => part?.stem) : [])]
+      .map((part) => String(part ?? ""))
+      .join(" "),
+    parentContext: item?.context,
+    optionsText: [item?.options, ...(Array.isArray(item?.parts) ? item.parts.map((part) => part?.options) : [])]
+      .map((part) => String(part ?? ""))
+      .join(" "),
+  };
+}
+
 function sameSharedFigure(a, b) {
   if (!a || !b || a.kind !== "figure" || b.kind !== "figure") return false;
+  if (!sameFigureFamily(figureItemFamilyInput(a), figureItemFamilyInput(b))) return false;
   const scanA = normalizeShareScan(a.shareScan);
   const scanB = normalizeShareScan(b.shareScan);
   if (scanA && scanB && scanA !== scanB) return false;
@@ -330,28 +363,28 @@ function sameSharedFigure(a, b) {
   return sharedCtx;
 }
 
-function partWantsDataTable(part, context = "") {
+function partWantsDataTable(part) {
   return needsDataTableVisual({
     questionText: part?.stem,
     optionsText: part?.options,
-    parentContext: context,
   });
 }
 
 function asFigurePart(item) {
-  const wantsTable = partWantsDataTable(
-    { stem: item.stem, options: item.options },
-    item.context,
-  );
+  const wantsTable = partWantsDataTable({ stem: item.stem, options: item.options });
+  const wantsInset = needsInsetFigure({ questionText: item.stem });
+  const keepSub = wantsTable || wantsInset;
   return {
     number: item.number,
     numberLabel: item.numberLabel || "",
     numberStyle: item.numberStyle || "round",
     stem: item.stem,
     options: item.options || "",
-    subFigureSrc: wantsTable ? item.subFigureSrc || "" : "",
-    subOccupancy: wantsTable ? item.subOccupancy ?? null : null,
-    subMasks: wantsTable ? item.subMasks ?? [] : [],
+    subFigureSrc: keepSub ? item.subFigureSrc || "" : "",
+    subOccupancy: keepSub ? item.subOccupancy ?? null : null,
+    subMasks: keepSub ? item.subMasks ?? [] : [],
+    printRole: item.printRole || "",
+    correctAnswer: item.correctAnswer || "",
   };
 }
 
@@ -389,8 +422,27 @@ export function mergeSharedFigureItems(items) {
     if (host) {
       const parts = host.parts?.length ? [...host.parts] : [asFigurePart(host)];
       pushUniqueFigurePart(parts, asFigurePart(item));
-      host.parts = parts;
-      // 共有図はホスト側の最新切り抜きを優先（後勝ちで空上書きしない）
+      host.parts = parts.sort((a, b) => Number(a.number || 0) - Number(b.number || 0));
+      // 共有図はリード文を巻き込まない方の切り抜きを使う
+      if (item.parentFigureSrc && item.shareCrop) {
+        const chosen = preferParentFigureBox(host.shareCrop, item.shareCrop);
+        const itemBox = usableGeminiBox(item.shareCrop);
+        if (
+          chosen &&
+          itemBox &&
+          chosen[0] === itemBox[0] &&
+          chosen[1] === itemBox[1] &&
+          chosen[2] === itemBox[2] &&
+          chosen[3] === itemBox[3]
+        ) {
+          host.parentFigureSrc = item.parentFigureSrc;
+          host.shareCrop = item.shareCrop;
+          host.occupancy = item.occupancy ?? host.occupancy;
+          host.parentOccupancy = item.parentOccupancy ?? host.parentOccupancy;
+          host.masks = item.masks ?? host.masks;
+          if (item.figureSrc) host.figureSrc = item.figureSrc;
+        }
+      }
       if (item.parentFigureSrc && !host.parentFigureSrc) host.parentFigureSrc = item.parentFigureSrc;
       if (item.figureSrc && !host.figureSrc) host.figureSrc = item.figureSrc;
       // 表画像はホストに1つだけ保持（各小問へのフォールバック用）
@@ -410,18 +462,48 @@ export function mergeSharedFigureItems(items) {
   return out;
 }
 
+/** ページ全体の生スキャンがあるか。切り抜き data URI だけでは切り直せない */
+export function hasRecropSource(problem) {
+  const path = String(problem?.originalPath || problem?.original_path || "").trim();
+  if (path && !/^(https?:|file:|content:|ph:|data:|assets-library:|mock)/i.test(path)) return true;
+  for (const key of ["localUri", "local_uri", "originalImageSrc", "original_image_src"]) {
+    const src = String(problem?.[key] || "").trim();
+    if (!src || src.startsWith("mock") || src.startsWith("data:")) continue;
+    if (/^(file:|content:|https?:|ph:|assets-library:|\/)/i.test(src)) return true;
+  }
+  return false;
+}
+
+/** 生スキャンがある問題は、印字直前に切り直した図だけ使う */
+export function acceptFreshPrintFigure(problem) {
+  if (Number(problem?.printFigureRev) === PRINT_CROP_REV) return true;
+  return !hasRecropSource(problem);
+}
+
 export function flattenWorksheetItems(problems) {
   const uniqueProblems = dedupePrintProblems(problems ?? []);
   const items = [];
   for (const problem of uniqueProblems) {
-    if (!isIncorrectForPrint(problem)) continue;
+    if (problem?.printRole !== "prerequisite" && !isIncorrectForPrint(problem)) continue;
     let visual = inferVisualType(problem);
-    const subBoxEarly = resolveSubFigureBox(problem) ?? subFigureBoxOf(problem);
-    const subSrcEarly = subFigureSrcOf(problem);
-    if ((subSrcEarly || subBoxEarly || needsDataTableVisual(problem)) && visual === "text_only") {
+    const wantsTable = needsDataTableVisual(problem);
+    const wantsInset = needsInsetFigure(problem);
+    const subBoxEarly = wantsTable
+      ? resolveSubFigureBox(problem) ?? subFigureBoxOf(problem)
+      : wantsInset
+        ? resolveInsetFigureBox(problem) ?? subFigureBoxOf(problem)
+        : null;
+    const subSrcEarly = wantsTable || wantsInset ? subFigureSrcOf(problem) : "";
+    if (
+      (subSrcEarly || subBoxEarly || needsDataTableVisual(problem) || benefitsFromParentFigure(problem)) &&
+      visual === "text_only"
+    ) {
       visual = "has_figure";
     }
-    const figureSrc = figureDataSrcOf(problem) || (isRasterImage(figureImageSrcOf(problem)) ? figureImageSrcOf(problem) : "");
+    const fresh = acceptFreshPrintFigure(problem);
+    const figureSrc = fresh
+      ? figureDataSrcOf(problem) || (isRasterImage(figureImageSrcOf(problem)) ? figureImageSrcOf(problem) : "")
+      : "";
     const context = contextTextOf(problem) || (visual === "passage_based" ? passageTextOf(problem) : "");
     const options = optionsTextOf(problem);
 
@@ -444,29 +526,39 @@ export function flattenWorksheetItems(problems) {
 
     if (visual === "has_figure") {
       const question = extractQuestionText(problem);
-      const parentSrc = parentFigureSrcOf(problem);
-      const subSrc = subFigureSrcOf(problem);
-      const figureSrc = parentSrc || subSrc || figureDataSrcOf(problem) || (isRasterImage(figureImageSrcOf(problem)) ? figureImageSrcOf(problem) : "");
+      const parentSrc = fresh ? parentFigureSrcOf(problem) : "";
+      const subSrc = fresh && (wantsTable || wantsInset) ? subFigureSrcOf(problem) : "";
+      const figureSrc = parentSrc || subSrc || (fresh
+        ? figureDataSrcOf(problem) || (isRasterImage(figureImageSrcOf(problem)) ? figureImageSrcOf(problem) : "")
+        : "");
       if (!figureSrc && !context && !options && (!question || isQuestionNumberOnly(question) || DUMMY_QUESTION.test(question))) {
         continue;
       }
-      const subBox = resolveSubFigureBox(problem) ?? subFigureBoxOf(problem);
-      const parentBox =
-        prepareParentFigureBox(parentFigureBoxOf(problem), subBox) ??
-        parentFigureBoxOf(problem);
+      const parentBox = resolveParentFigureBox(problem) ?? parentFigureBoxOf(problem);
       const answerBox =
         earliestStemBelowParent(uniqueProblems, parentBox || figureCropBoxOf(problem), problem) ??
         problem?.bbox ??
         problem?.gemini_bbox ??
         problem?.geminiBbox;
+      const subBox = wantsTable
+        ? resolveSubFigureBox(problem) ?? subFigureBoxOf(problem)
+        : wantsInset
+          ? resolveInsetFigureBox({ ...problem, parentFigureBox: parentBox, bbox: answerBox }) ??
+            subFigureBoxOf(problem)
+          : null;
       const parentPlan = planExpandedFigureCrop(parentBox || figureCropBoxOf(problem), answerBox, {
         preserveExtent: true,
       });
+      const insetAnswer =
+        wantsInset && !wantsTable
+          ? usableGeminiBox(problem?.bbox ?? problem?.gemini_bbox ?? problem?.geminiBbox) ?? answerBox
+          : null;
       const subPlan = subBox
-        ? planExpandedFigureCrop(subBox, null, {
+        ? planExpandedFigureCrop(subBox, insetAnswer, {
             preserveExtent: true,
             clipBottomBeforeStem: false,
-            asTable: true,
+            asTable: wantsTable,
+            asInset: wantsInset && !wantsTable,
           })
         : { cropGemini: null, masks: [] };
       const parentMasks = parentSrc ? parentPlan.masks : [];
@@ -482,10 +574,14 @@ export function flattenWorksheetItems(problems) {
           masks: parentMasks,
           occupancy: occupancyFromBox(parentBox || figureCropBoxOf(problem)),
           parentOccupancy: occupancyFromBox(parentBox || figureCropBoxOf(problem)),
-          subOccupancy: subBox ? occupancyFromBox(subBox, { asTable: true }) : null,
+          subOccupancy: subBox
+            ? occupancyFromBox(subBox, { asTable: wantsTable, asInset: wantsInset && !wantsTable })
+            : null,
           subMasks,
           shareScan: scanShareId(problem),
           shareCrop: parentBox || figureCropBoxOf(problem),
+          printRole: problem?.printRole || "",
+          correctAnswer: problem?.correctAnswer ?? problem?.correct_answer ?? "",
         }),
       );
       continue;
@@ -550,12 +646,6 @@ export function explodeFigureItemsForPages(items, maxParts = FIGURE_PARTS_PER_SH
       out.push({
         ...item,
         id: `${item.id}-cont-${i}`,
-        parentFigureSrc: "",
-        figureSrc: "",
-        context: "",
-        occupancy: null,
-        parentOccupancy: null,
-        masks: [],
         parts: parts.slice(i, i + size),
       });
     }
@@ -617,6 +707,15 @@ html, body {
   background: #fff;
   color: #222;
   font-family: "Hiragino Sans", "Yu Gothic", "Noto Sans JP", sans-serif;
+}
+.print-crop-rev {
+  position: absolute;
+  left: 0;
+  top: 0;
+  font-size: 1px;
+  line-height: 1px;
+  color: #fff;
+  opacity: 0.02;
 }
 .sheet {
   width: 100%;
@@ -743,6 +842,17 @@ img {
   padding-top: 8px;
   border-top: 1px solid #eee;
 }
+.answer-box-filled {
+  width: auto;
+  min-width: 60px;
+  padding: 4px 10px;
+  font-size: 16px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f3f3f3;
+}
 .answer-box {
   flex: 0 0 auto;
   width: 60px;
@@ -774,14 +884,46 @@ img {
   page-break-inside: avoid;
   break-inside: avoid;
 }
+.figure-media.parent-figure {
+  padding-top: 1.5mm;
+}
 .figure-media.parent-figure img {
   max-height: 68mm;
 }
 .figure-media.sub-figure {
-  width: 100%;
+  width: min(var(--crop-w, 100%), 100%);
 }
 .figure-media.sub-figure img {
-  max-height: none;
+  max-height: 92mm;
+}
+.item-part-with-inset {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 8px;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+.item-part-inset-left {
+  flex-direction: row-reverse;
+}
+.item-part-copy {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.figure-media.inset-figure {
+  flex: 0 0 auto;
+  width: 32%;
+  max-width: 36%;
+  height: 48mm;
+  margin: 0;
+}
+.figure-media.inset-figure img {
+  width: 100%;
+  height: 100%;
+  max-height: 48mm;
+  object-fit: contain;
+  object-position: center center;
 }
 /* 大問カード全体は小問のあいだで折り返してよい。図・表・小問は分割しない */
 .item-figure {
@@ -859,6 +1001,11 @@ export function stripRepeatedLead(stem, context) {
   return s;
 }
 
+function answeredMarkup(answer) {
+  const text = escapeHtml(String(answer ?? "").trim());
+  return `<div style="display: flex; justify-content: flex-end;"><div class="answer-box answer-box-filled">${text || "○"}</div></div>`;
+}
+
 function answerMarkup(kind, hasOptions) {
   if (kind === "figure" && !hasOptions) return `<div class="answer-frame">&nbsp;</div>`;
   return `<div style="display: flex; justify-content: flex-end;"><div class="answer-box">&nbsp;</div></div>`;
@@ -915,6 +1062,8 @@ function figurePartsOf(item) {
       subFigureSrc: item.subFigureSrc || "",
       subOccupancy: item.subOccupancy ?? null,
       subMasks: item.subMasks ?? [],
+      printRole: item.printRole || "",
+      correctAnswer: item.correctAnswer || "",
     },
   ];
 }
@@ -956,11 +1105,12 @@ function worksheetCell(item) {
         )
           .replace(/\$/g, "")
           .trim();
-        const wantsTable = partWantsDataTable(part, rawContext);
+        const wantsTable = partWantsDataTable(part);
+        const wantsInset = needsInsetFigure({ questionText: part.stem });
         const subSrc = String(
-          part.subFigureSrc || (wantsTable ? item.subFigureSrc : "") || "",
+          part.subFigureSrc || (wantsTable || wantsInset ? item.subFigureSrc : "") || "",
         ).trim();
-        const subOcc = part.subOccupancy ?? (wantsTable ? item.subOccupancy : null);
+        const subOcc = part.subOccupancy ?? (wantsTable || wantsInset ? item.subOccupancy : null);
         const subKey =
           subOcc && Number.isFinite(subOcc.heightMm)
             ? `occ:${Math.round(Number(subOcc.widthPct) * 10)}:${Math.round(Number(subOcc.heightMm) * 10)}`
@@ -968,15 +1118,16 @@ function worksheetCell(item) {
               ? `src:${subSrc.length}:${subSrc.slice(40, 88)}`
               : "";
         let subImage = "";
-        // 親図の二重描画を避けつつ、表が必要な小問にだけ1回出す
+        // 親図の二重描画を避けつつ、表・差し込み図が必要な小問に1回出す
         if (
-          wantsTable &&
+          (wantsTable || wantsInset) &&
           isDistinctSubFigure(parentSrc, subSrc, parentOcc, subOcc) &&
           subKey &&
           !shownSubs.has(subKey)
         ) {
           shownSubs.add(subKey);
-          subImage = figureMediaHtml(subSrc, subOcc, part.subMasks ?? item.subMasks, "sub-figure");
+          const insetClass = wantsInset && !wantsTable ? " sub-figure inset-figure" : " sub-figure";
+          subImage = figureMediaHtml(subSrc, subOcc, part.subMasks ?? item.subMasks, insetClass.trim());
         }
         const rawOptions = stripMarkdownTables(part.options || "");
         const partOptions = escapeHtml(sanitizeStem(rawOptions)).replace(/\$/g, "").trim();
@@ -984,11 +1135,20 @@ function worksheetCell(item) {
         const question = partStem && partStem !== context
           ? `<div class="item-stem">${partNum}${partStem}</div>`
           : `<div class="item-head">${partNum}</div>`;
+        const answer = part.printRole === "prerequisite" ? answeredMarkup(part.correctAnswer) : answerMarkup("figure", Boolean(partOptions));
+        const optionsBlock = partOptions ? `<div class="item-options">${partOptions}</div>` : "";
+        const place = figurePlacementOf({ questionText: part.stem, optionsText: part.options });
+        if (subImage && (place === "right" || place === "left")) {
+          return `<div class="item-part item-part-with-inset item-part-inset-${place}">
+  <div class="item-part-copy">${question}${optionsBlock}${answer}</div>
+  ${subImage}
+</div>`;
+        }
         return `<div class="item-part">
   ${question}
   ${subImage}
-  ${partOptions ? `<div class="item-options">${partOptions}</div>` : ""}
-  ${answerMarkup("figure", Boolean(partOptions))}
+  ${optionsBlock}
+  ${answer}
 </div>`;
       })
       .join("");
@@ -1037,7 +1197,8 @@ export function buildPrintHtml(input) {
     passage: sanitizeStem(item.passage),
   }));
   if (input.scope === "daily") items = items.slice(0, 5);
-  const singlePage = input.scope !== "all";
+  if (input.scope === "recommended") items = items.slice(0, 6);
+  const singlePage = input.scope !== "all" && input.scope !== "today";
   items = explodeFigureItemsForPages(items);
   const rows = packWorksheetRows(items);
   const pages = singlePage ? [rows] : paginateWorksheetRows(rows, PRINT_ROWS_PER_PAGE);
@@ -1053,7 +1214,7 @@ export function buildPrintHtml(input) {
         <h1 style="font-size: 16px; margin: 2px 0 6px; font-weight: 700;">${escapeHtml(input.title ?? "今日のまとめプリント")}</h1>
         <div style="display: flex; justify-content: space-between; font-size: 12px; color: #222;">
           <span>${escapeHtml(input.nameLabel ?? `なまえ: ${childName || "—"}`)}</span>
-          <span>${escapeHtml(dateLabel || "")}</span>
+          <span>${escapeHtml(dateLabel || "")} r${PRINT_CROP_REV}</span>
         </div>
       </header>
       <div class="print-body">${body}</div>
@@ -1065,10 +1226,12 @@ export function buildPrintHtml(input) {
 <html lang="${escapeHtml(input.htmlLang ?? "ja")}">
 <head>
   <meta charset="utf-8" />
-  <title>${escapeHtml(input.title ?? "MARU まとめプリント")}</title>
+  <title>${escapeHtml(input.title ?? "MARU まとめプリント")} · r${PRINT_CROP_REV}</title>
+  <!-- maru-print-crop-rev:${PRINT_CROP_REV} -->
   <style>${PRINT_CSS}</style>
 </head>
-<body>
+<body data-maru-print-crop-rev="${PRINT_CROP_REV}">
+<span class="print-crop-rev">maru-print-crop-rev:${PRINT_CROP_REV}</span>
 ${sheets}
 </body>
 </html>`;

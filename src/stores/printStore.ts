@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type PrintProblemScope = "daily" | "all";
+export type PrintProblemScope = "today" | "recommended" | "daily" | "all";
 
 type PrintState = {
   scope: PrintProblemScope;
@@ -12,7 +12,7 @@ type PrintState = {
 };
 
 export const usePrintStore = create<PrintState>((set, get) => ({
-  scope: "daily",
+  scope: "today",
   excludedIds: [],
   setScope: (scope) => set({ scope }),
   togglePrintSelection: (id) =>

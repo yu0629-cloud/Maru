@@ -4,6 +4,13 @@ import { isExpoGo } from "@/src/lib/env";
 import { withTimeout } from "@/src/lib/async/timeout";
 import { compressScanForGrade, persistScanImage, toFileUri, cropFigureToBase64 } from "@/src/lib/files/scan-image";
 import { coerceGeminiBox, inferVisualType } from "@/src/features/print/lib/visual.mjs";
+import {
+  needsDataTableVisual,
+  needsInsetFigure,
+  resolveInsetFigureBox,
+  resolveParentFigureBox,
+  resolveSubFigureBox,
+} from "@/src/features/print/lib/figure-boxes.mjs";
 import { uploadCompressedScan } from "@/src/lib/storage/upload-scan";
 import { getMemoryAccessToken } from "@/src/lib/supabase/access-token";
 import { supabase } from "@/src/lib/supabase/client";
@@ -11,6 +18,7 @@ import { gradeResultToView, MOCK_GRADE_RESULT } from "@/src/features/grading/moc
 import { recountScore } from "@/src/features/grading/corrections";
 import { normalizeSubject } from "@/src/features/scans/subject";
 import { useScanStore, type ScanRecord } from "@/src/stores/scanStore";
+import { useReviewStore } from "@/src/stores/reviewStore";
 import { problemsNeedingInpaint } from "@/src/features/grading/corrections";
 import type { GradeResult } from "@/src/types/grading";
 
@@ -48,6 +56,7 @@ function recordFromGradeResult(input: {
   localUri: string;
   originalStoragePath?: string | null;
   result: GradeResult;
+  childDetection?: ScanRecord["childDetection"];
 }): ScanRecord {
   const problems = gradeResultToView(input.result, input.scanId).map((problem) => ({
     ...problem,
@@ -56,6 +65,7 @@ function recordFromGradeResult(input: {
   const scan: ScanRecord = {
     id: input.scanId,
     childId: input.childId,
+    childDetection: input.childDetection,
     status: "completed",
     localUri: toFileUri(input.localUri),
     originalStoragePath: input.originalStoragePath,
@@ -75,15 +85,25 @@ async function attachFigureCrops(scan: ScanRecord): Promise<ScanRecord> {
     scan.problems.map(async (problem) => {
       const visual = inferVisualType(problem);
       if (visual !== "has_figure") return problem;
-      const parentBox = coerceGeminiBox(problem.parent_figure_box);
-      const subBox = coerceGeminiBox(problem.sub_figure_box);
+      const parentBox = resolveParentFigureBox(problem);
+      const wantsTable = needsDataTableVisual(problem);
+      const wantsInset = needsInsetFigure(problem);
+      const subBox = wantsTable
+        ? resolveSubFigureBox(problem)
+        : wantsInset
+          ? resolveInsetFigureBox({
+              ...problem,
+              parentFigureBox: parentBox,
+              parent_figure_box: parentBox,
+            })
+          : coerceGeminiBox(problem.sub_figure_box);
       const cropBox =
         coerceGeminiBox(problem.crop_box) ??
         parentBox ??
         subBox ??
         coerceGeminiBox(problem.bbox) ??
         [0, 0, 1000, 1000];
-      const cropOne = async (box: unknown, suffix: string) => {
+      const cropOne = async (box: unknown, suffix: string, asInset = false, asTable = false) => {
         if (!box) return "";
         return (
           (await cropFigureToBase64({
@@ -91,18 +111,22 @@ async function attachFigureCrops(scan: ScanRecord): Promise<ScanRecord> {
             cropBox: box,
             scanId: scan.id,
             problemId: `${problem.id}-${suffix}`,
-            answerBBox: problem.bbox ?? null,
+            answerBBox: asTable ? null : problem.bbox ?? null,
             visualType: visual,
+            asInset,
+            asTable,
           })) ?? ""
         );
       };
       const figureBase64 = await cropOne(parentBox || cropBox, "p");
-      const subFigureBase64 = await cropOne(subBox, "s");
+      const subFigureBase64 = await cropOne(subBox, "s", wantsInset && !wantsTable, wantsTable);
       if (!figureBase64 && !subFigureBase64) return problem;
       return {
         ...problem,
         figureImageSrc: figureBase64 || subFigureBase64,
         figureBase64: figureBase64 || subFigureBase64,
+        parentFigureSrc: figureBase64 || undefined,
+        subFigureSrc: subFigureBase64 || undefined,
         subFigureBase64: subFigureBase64 || undefined,
       };
     }),
@@ -133,6 +157,8 @@ function mapGradeScanError(status: number, payload: { error?: string; message?: 
 type GradeScanPayload = {
   ok?: boolean;
   scanId?: string | null;
+  child_id?: string | null;
+  child_detection?: ScanRecord["childDetection"];
   subject?: GradeResult["subject"];
   overall_score?: GradeResult["overall_score"];
   problems?: GradeResult["problems"];
@@ -235,10 +261,11 @@ async function gradeViaEdgeFunction(input: {
   return attachFigureCrops(
     recordFromGradeResult({
       scanId: payload.scanId ?? `scan-${Date.now()}`,
-      childId: input.childId,
+      childId: payload.child_id || input.childId,
       localUri: compressed.uri,
       originalStoragePath: uploaded.storagePath,
       result: { subject: payload.subject, overall_score: payload.overall_score, problems: payload.problems },
+      childDetection: payload.child_detection,
     }),
   );
 }
@@ -346,6 +373,7 @@ async function confirmRemote(scan: ScanRecord) {
 export async function confirmScanCorrections(scan: ScanRecord) {
   useScanStore.getState().updateProblems(scan.id, scan.problems, recountScore(scan.problems));
   useScanStore.getState().markConfirmed(scan.id);
+  useReviewStore.getState().applyScanGrades(scan.problems, scan.createdAt);
 
   if (!shouldUseRemote(scan.childId)) {
     await sleep(400);

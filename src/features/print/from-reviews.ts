@@ -17,6 +17,7 @@ import {
   selectProblemsForScope,
   stripLatexDollars,
   DAILY_PRINT_MAX,
+  RECOMMENDED_PRINT_MAX,
   dedupePrintProblems,
   contentDedupeKey,
 } from "./lib/from-reviews.mjs";
@@ -60,6 +61,7 @@ export {
   selectProblemsForScope,
   stripLatexDollars,
   DAILY_PRINT_MAX,
+  RECOMMENDED_PRINT_MAX,
   dedupePrintProblems,
   contentDedupeKey,
 };

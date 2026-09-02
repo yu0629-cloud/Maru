@@ -17,6 +17,9 @@ export {
   splitOptionNumbers,
   findSupplementaryDegreePair,
   applyCopiedAnswerGuards,
+  snapBBoxToAnswerSlot,
+  canonicalizeChoiceAnswer,
+  normalizeAnswerType,
   extractArithmeticExpression,
   evaluateArithmetic,
   expectedMathValue,
@@ -51,5 +54,7 @@ export type ExtractedProblem = {
   parent_figure_box?: [number, number, number, number] | null;
   sub_figure_box?: [number, number, number, number] | null;
   word_bank?: string;
+  answer_type?: "handwritten_text" | "circle_selection" | "none";
+  is_blank?: boolean;
   gemini_is_correct?: boolean;
 };

@@ -25,6 +25,6 @@ export function inferVisualType(input = {}) {
   if (type === "math_geometry_graph" || type === "science_social_diagram") return "has_figure";
   const hay = `${input.topic ?? input.topic_tag ?? input.topicTag ?? ""} ${input.question_text ?? input.questionText ?? ""} ${input.parent_context ?? input.parentContext ?? input.context_text ?? input.contextText ?? ""} ${input.options_text ?? input.optionsText ?? ""}`;
   if (/長文|読解|本文|passage|dialogue|対話文|会話文|下線部/.test(hay)) return "passage_based";
-  if (/作図|グラフ|展開図|立体|時計|イラスト|地図|回路|切断|コンパス|図形|資料|次の表|下の表|表にまと|和にまと|下の図|次の図|右の図/.test(hay)) return "has_figure";
+  if (/作図|グラフ|展開図|立体|時計|イラスト|地図|回路|切断|コンパス|図形|資料|次の表|下の表|表にまと|和にまと|下の図|次の図|右の図|すき間|線香|集気びん|ろうそく|[㋐-㋾]|[ア-エウ]の(?:上|下)/.test(hay)) return "has_figure";
   return "text_only";
 }

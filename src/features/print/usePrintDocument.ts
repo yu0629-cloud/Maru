@@ -29,10 +29,13 @@ function scanFingerprint(scans: Record<string, { id: string; problems?: Array<{ 
     .join("|");
 }
 
-export function usePrintDocument(): PrintDocumentInput & { candidates: PrintProblem[] } {
+export function usePrintDocument(): PrintDocumentInput & {
+  candidates: PrintProblem[];
+  imagesReady: boolean;
+} {
   const locale = useAppLocale();
   const { currentChild } = useCurrentChild();
-  const { items, daily, mocked, refresh } = useDailyReviews();
+  const { items, daily, todayRedo, mocked, refresh } = useDailyReviews();
   const scans = useScanStore((state) => state.scans);
   const scansKey = scanFingerprint(scans);
   const scope = usePrintStore((state) => state.scope);
@@ -67,12 +70,15 @@ export function usePrintDocument(): PrintDocumentInput & { candidates: PrintProb
       childId: currentChild?.id,
       allowMockFallback: mocked,
       scope,
-      preferredIds: daily.map((item) => item.problemId || item.id),
+      preferredIds:
+        scope === "today"
+          ? todayRedo.map((item) => item.id)
+          : daily.map((item) => item.problemId || item.id),
     }).map((problem) => ({
       ...problem,
       answerStyle: chooseAnswerStyle(problem),
     }));
-  }, [currentChild?.id, daily, extras, items, mocked, scans, scope]);
+  }, [currentChild?.id, daily, extras, items, mocked, scans, scope, todayRedo]);
 
   const excluded = useMemo(() => new Set(excludedIds.map((id) => String(id))), [excludedIds]);
   const visibleProblems = useMemo(
@@ -89,7 +95,20 @@ export function usePrintDocument(): PrintDocumentInput & { candidates: PrintProb
         if (!cancelled) setResolvedProblems(next);
       })
       .catch(() => {
-        if (!cancelled) setResolvedProblems(visibleProblems);
+        if (!cancelled) {
+          setResolvedProblems(
+            visibleProblems.map((problem) => ({
+              ...problem,
+              figureImageSrc: "",
+              figureBase64: "",
+              parentFigureSrc: "",
+              parentFigureBase64: "",
+              subFigureSrc: "",
+              subFigureBase64: "",
+              imageSrc: "",
+            })),
+          );
+        }
       });
     return () => {
       cancelled = true;
@@ -109,6 +128,7 @@ export function usePrintDocument(): PrintDocumentInput & { candidates: PrintProb
       includeCheatSheet: false,
       problems,
       candidates,
+      imagesReady: resolvedProblems !== null,
       scope,
       brand: t("print.brand"),
       nameLabel: t("print.nameLabel", { name: childName ?? "—" }),

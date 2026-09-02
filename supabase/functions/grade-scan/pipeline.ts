@@ -4,6 +4,7 @@ import { HttpError } from "./errors.ts";
 import { createGeminiClient, type GeminiClient, type GeminiImagePart } from "./gemini.ts";
 import { base64ToBytes, bytesToBase64, fetchImageAsBase64, guessMimeType, stripDataUrl } from "./image.ts";
 import { inpaintTargetsFromInserts, toProblemInserts } from "./persist.ts";
+import { resolveChildDetection } from "./match-child.mjs";
 import { buildSystemPrompt, buildUserPrompt, gradeCodeToLabel } from "./prompt.ts";
 import { buildEnrichSystemPrompt, buildEnrichUserPrompt } from "./enrich.ts";
 import { countCorrect, shouldQueueInpaint, validateGradeResult } from "./validate.ts";
@@ -32,10 +33,20 @@ export type GradeScanPersisted = {
   reviewEnqueued: number | null;
 };
 
+export type ChildDetectionOutput = {
+  detected_child_id: string;
+  detected_child_name: string;
+  confidence_reason: string;
+  matched: boolean;
+  fallback: boolean;
+};
+
 export type GradeScanOutput = {
   ok: true;
   dryRun: boolean;
   scanId: string | null;
+  child_id: string | null;
+  child_detection: ChildDetectionOutput;
   subject: GradeResult["subject"];
   overall_score: GradeResult["overall_score"];
   problems: GradeResult["problems"];
@@ -85,6 +96,65 @@ function assertOwnedStoragePath(path: string, parentId: string, childId: string)
 
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+type ChildProfile = {
+  id: string;
+  name: string;
+  grade_code: string;
+  exam_target?: string | null;
+};
+
+function toDetectionOutput(
+  resolved: ReturnType<typeof resolveChildDetection>,
+): ChildDetectionOutput {
+  return {
+    detected_child_id: resolved.detected_child_id || resolved.childId,
+    detected_child_name: resolved.detected_child_name,
+    confidence_reason: resolved.confidence_reason,
+    matched: resolved.matched,
+    fallback: resolved.fallback,
+  };
+}
+
+function detectionColumns(resolved: ReturnType<typeof resolveChildDetection>) {
+  const detectedId = resolved.detected_child_id && isUuid(resolved.detected_child_id)
+    ? resolved.detected_child_id
+    : resolved.matched && resolved.childId && isUuid(resolved.childId)
+      ? resolved.childId
+      : null;
+  return {
+    detected_child_id: detectedId,
+    detected_child_name: resolved.detected_child_name || null,
+    child_detection_reason: resolved.confidence_reason || null,
+    child_detection_matched: resolved.matched,
+  };
+}
+
+async function loadOwnedChildren(
+  supabase: ServiceClient,
+  parentId: string,
+): Promise<ChildProfile[]> {
+  const query = supabase
+    .from("children")
+    .select("id, name, grade_code, exam_target")
+    .eq("parent_id", parentId)
+    .order("sort_order", { ascending: true });
+  const { data, error } = await query;
+  if (error) {
+    console.error("[grade-scan] load children failed", error);
+    return [];
+  }
+  return Array.isArray(data) ? (data as ChildProfile[]) : [];
+}
+
+function childToPrompt(child: ChildProfile) {
+  return {
+    id: child.id,
+    name: child.name ?? "",
+    gradeLabel: gradeCodeToLabel(child.grade_code ?? "e4"),
+    examTarget: child.exam_target ?? null,
+  };
 }
 
 async function downloadStorageImage(
@@ -303,6 +373,7 @@ async function persistGradeOutcome(
   await supabase
     .from("scans")
     .update({
+      child_id: scan.child_id,
       status: jobs.length > 0 ? "inpainting" : "completed",
       subject: result.subject ?? inserts[0]?.subject ?? "other",
       total_problems: counts.total,
@@ -392,21 +463,27 @@ async function persistDirectScan(input: {
   path: string;
   image: GeminiImagePart;
   result: GradeResult;
+  detection: ReturnType<typeof resolveChildDetection>;
   supabase: ServiceClient;
   gemini: GeminiClient;
   invokeInpaint: (payload: Record<string, unknown>) => Promise<void>;
   skipUpload?: boolean;
 }): Promise<GradeScanPersisted> {
-  const { scan, parentId, childId, path, image, result, supabase, gemini, invokeInpaint, skipUpload } = input;
+  const { scan, parentId, childId, path, image, result, detection, supabase, gemini, invokeInpaint, skipUpload } = input;
 
   try {
-    const { error: insertError } = await supabase.from("scans").insert({
+    const baseScan = {
       id: scan.id,
       parent_id: parentId,
       child_id: childId,
       original_storage_path: path,
       status: "grading",
-    });
+    };
+    const withDetection = { ...baseScan, ...detectionColumns(detection) };
+    let { error: insertError } = await supabase.from("scans").insert(withDetection);
+    if (insertError && /detected_child|child_detection/i.test(insertError.message ?? "")) {
+      ({ error: insertError } = await supabase.from("scans").insert(baseScan));
+    }
     if (insertError) {
       throw new HttpError(500, "SCAN_INSERT_FAILED", insertError.message);
     }
@@ -483,6 +560,10 @@ async function runDirectGradeScan(
   if (child.parent_id && parentId !== child.parent_id) {
     throw new HttpError(403, "CHILD_NOT_OWNED");
   }
+  const roster = await loadOwnedChildren(supabase, parentId);
+  const rosterOrSelf = roster.length > 0
+    ? roster
+    : [{ id: child.id, name: child.name ?? "", grade_code: child.grade_code ?? "e4", exam_target: child.exam_target }];
 
   const preuploaded = Boolean(input.storagePath);
   const path = preuploaded
@@ -510,27 +591,47 @@ async function runDirectGradeScan(
   );
   console.log("[grade-scan] image ready", { bytes: Math.round((image.data.length * 3) / 4), mimeType: image.mimeType });
 
-  const systemPrompt = buildSystemPrompt(null, {
-    name: child.name ?? "",
-    gradeLabel: gradeCodeToLabel(child.grade_code ?? "e4"),
-    examTarget: child.exam_target ?? null,
-  });
+  const systemPrompt = buildSystemPrompt(
+    null,
+    {
+      id: child.id,
+      name: child.name ?? "",
+      gradeLabel: gradeCodeToLabel(child.grade_code ?? "e4"),
+      examTarget: child.exam_target ?? null,
+    },
+    rosterOrSelf.map(childToPrompt),
+  );
 
-  console.log("[grade-scan] gemini grade start", { scanId, childId: input.childId });
+  console.log("[grade-scan] gemini grade start", { scanId, childId: input.childId, roster: rosterOrSelf.length });
 
   const result = await gemini.gradeWorksheet({
     systemPrompt,
     userPrompt: buildUserPrompt(),
     image,
   });
+  const detection = resolveChildDetection({
+    children: rosterOrSelf,
+    fallbackChildId: input.childId,
+    hint: result.child_detection,
+  });
+  const assignedChildId = detection.childId || input.childId;
+  scan.child_id = assignedChildId;
+  console.log("[grade-scan] child detection", {
+    scanId,
+    fallback: input.childId,
+    assigned: assignedChildId,
+    matched: detection.matched,
+    name: detection.detected_child_name,
+  });
 
   const background = persistDirectScan({
     scan,
     parentId,
-    childId: input.childId,
+    childId: assignedChildId,
     path,
     image,
     result,
+    detection,
     supabase,
     gemini,
     invokeInpaint: deps.invokeInpaint ?? defaultInvokeInpaint,
@@ -542,6 +643,8 @@ async function runDirectGradeScan(
       ok: true,
       dryRun: false,
       scanId,
+      child_id: assignedChildId,
+      child_detection: toDetectionOutput(detection),
       subject: result.subject,
       overall_score: result.overall_score,
       problems: result.problems,
@@ -570,21 +673,33 @@ export async function executeGradeScan(
   }
 
   let scan: ScanRow | null = null;
-  let child = { name: "", grade_code: "e4", exam_target: null as string | null };
+  let child = { id: "", name: "", grade_code: "e4", exam_target: null as string | null };
   const carte: CarteJson | null = input.carteJsonb ?? null;
+  let roster: ChildProfile[] = [];
 
   if (input.scanId && supabase) {
     const loaded = await loadScanContext(input, supabase);
     scan = loaded.scan;
-    child = loaded.child;
+    child = { id: loaded.scan.child_id, ...loaded.child };
+    roster = await loadOwnedChildren(supabase, loaded.scan.parent_id);
   }
 
   const image = await resolveImage(input, scan, supabase);
-  const systemPrompt = buildSystemPrompt(null, {
-    name: child.name,
-    gradeLabel: gradeCodeToLabel(child.grade_code),
-    examTarget: child.exam_target,
-  });
+  const rosterForPrompt = roster.length > 0
+    ? roster
+    : child.id
+      ? [{ id: child.id, name: child.name, grade_code: child.grade_code, exam_target: child.exam_target }]
+      : [];
+  const systemPrompt = buildSystemPrompt(
+    null,
+    {
+      id: child.id || input.childId,
+      name: child.name,
+      gradeLabel: gradeCodeToLabel(child.grade_code),
+      examTarget: child.exam_target,
+    },
+    rosterForPrompt.map(childToPrompt),
+  );
 
   if (scan && supabase && !dryRun) {
     if (!scan.quota_source) {
@@ -623,12 +738,23 @@ export async function executeGradeScan(
     throw error;
   }
 
+  const detection = resolveChildDetection({
+    children: rosterForPrompt,
+    fallbackChildId: scan?.child_id ?? input.childId,
+    hint: result.child_detection,
+  });
+  if (scan && detection.childId) {
+    scan.child_id = detection.childId;
+  }
+
   if (dryRun || !scan || !supabase) {
     return {
       output: {
         ok: true,
         dryRun: true,
         scanId: scan?.id ?? input.scanId ?? null,
+        child_id: detection.childId || input.childId || null,
+        child_detection: toDetectionOutput(detection),
         subject: result.subject,
         overall_score: result.overall_score,
         problems: result.problems,
@@ -641,6 +767,14 @@ export async function executeGradeScan(
       },
     };
   }
+
+  await supabase
+    .from("scans")
+    .update({
+      child_id: scan.child_id,
+      ...detectionColumns(detection),
+    })
+    .eq("id", scan.id);
 
   const background = (async () => {
     const persisted = await persistGradeOutcome({
@@ -678,6 +812,8 @@ export async function executeGradeScan(
       ok: true,
       dryRun: false,
       scanId: scan.id,
+      child_id: scan.child_id,
+      child_detection: toDetectionOutput(detection),
       subject: result.subject,
       overall_score: result.overall_score,
       problems: result.problems,

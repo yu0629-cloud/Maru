@@ -17,6 +17,16 @@ export type ReviewQueueItem = {
   easeFactor: number;
   consecutiveMisses: number;
   consecutiveHits: number;
+  reviewStage?: 0 | 1 | 2 | 3;
+  review_stage?: 0 | 1 | 2 | 3;
+  mistakeCount?: number;
+  mistake_count?: number;
+  lastReviewedAt?: string | null;
+  last_reviewed_at?: string | null;
+  nextReviewAt?: string | null;
+  next_review_at?: string | null;
+  isArchived?: boolean;
+  is_archived?: boolean;
   lastResult?: boolean | null;
   leechAt?: string | null;
   completed?: boolean;
@@ -78,7 +88,7 @@ export function isolateLeeches(items: ReviewQueueItem[]): ReviewQueueItem[] {
 export function applyReviewResult(
   item: ReviewQueueItem,
   isCorrect: boolean,
-  options?: { leechMissThreshold?: number; masteredIntervalDays?: number; masteredHitThreshold?: number },
+  options?: { leechMissThreshold?: number; masteredIntervalDays?: number; masteredHitThreshold?: number; now?: Date },
 ): ReviewQueueItem {
   return applyReviewResultImpl(item, isCorrect, options);
 }

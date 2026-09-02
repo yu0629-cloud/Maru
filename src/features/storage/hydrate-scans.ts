@@ -16,7 +16,13 @@ type ProblemRow = Database["public"]["Tables"]["problems"]["Row"];
 type HydratedScanRow = Pick<
   ScanRow,
   "id" | "child_id" | "original_storage_path" | "original_purged_at" | "status" | "overall_score" | "created_at" | "subject"
->;
+> &
+  Partial<
+    Pick<
+      ScanRow,
+      "detected_child_id" | "detected_child_name" | "child_detection_reason" | "child_detection_matched"
+    >
+  >;
 type HydratedProblemRow = Pick<
   ProblemRow,
   | "id"
@@ -97,9 +103,22 @@ function scoreOf(row: HydratedScanRow, problems: GradedProblemView[]): OverallSc
 }
 
 function toRecord(row: HydratedScanRow, problems: GradedProblemView[]): ScanRecord {
+  const detectedName = row.detected_child_name ?? "";
+  const reason = row.child_detection_reason ?? "";
+  const matched = Boolean(row.child_detection_matched);
   return {
     id: row.id,
     childId: row.child_id ?? "",
+    childDetection:
+      detectedName || reason || row.detected_child_id
+        ? {
+            detected_child_id: row.detected_child_id ?? row.child_id ?? "",
+            detected_child_name: detectedName,
+            confidence_reason: reason,
+            matched,
+            fallback: !matched,
+          }
+        : undefined,
     status: mapScanStatus(row.status),
     originalStoragePath: row.original_storage_path,
     originalPurgedAt: row.original_purged_at,
@@ -124,6 +143,7 @@ function mergeIntoStore(mapped: ScanRecord) {
     createdAt: existing.createdAt ?? mapped.createdAt,
     subject: mapped.subject ?? existing.subject,
     isDemo: existing.isDemo,
+    childDetection: mapped.childDetection ?? existing.childDetection,
     problems: keepLocalProblems ? existing.problems : mapped.problems,
     overall_score: keepLocalProblems ? existing.overall_score : mapped.overall_score,
     confirmed: existing.confirmed || mapped.confirmed,
@@ -158,39 +178,40 @@ async function fetchProblemsForScans(scanIds: string[]) {
 
 const SCAN_SELECT =
   "id, parent_id, child_id, original_storage_path, original_purged_at, status, overall_score, created_at, completed_at, subject";
+const SCAN_SELECT_WITH_DETECTION = `${SCAN_SELECT}, detected_child_id, detected_child_name, child_detection_reason, child_detection_matched`;
 
 /**
- * クォータと同じ親（user_id / parent_id）のスキャンを取る。
- * 選択中の子どもに加え、child_id が null の行も含める。0件なら親配下すべてにフォールバック。
+ * 選択中の子どものスキャンだけを取る。他の子どもの行は混ぜない。
  */
 export async function fetchOwnedScans(input: { parentId?: string | null; childId?: string | null } = {}) {
   const parentId = input.parentId ?? useAuthStore.getState().userId;
   if (!parentId || !shouldUseRemote(parentId)) return [];
 
-  const run = (scopeToChild: boolean) => {
+  const run = (select: string) => {
     let query = supabase
       .from("scans")
-      .select(SCAN_SELECT)
+      .select(select)
       .eq("parent_id", parentId)
       .order("created_at", { ascending: false })
       .limit(200);
-    if (scopeToChild && input.childId && isUuid(input.childId)) {
-      query = query.or(`child_id.eq.${input.childId},child_id.is.null`);
+    if (input.childId && isUuid(input.childId)) {
+      query = query.eq("child_id", input.childId);
     }
     return query;
   };
 
-  const first = await run(Boolean(input.childId && isUuid(input.childId)));
-  if (first.error) throw first.error;
-  let data = first.data ?? [];
-  console.log("Fetched scans count:", data.length);
-  if (data.length === 0 && input.childId && isUuid(input.childId)) {
-    const fallback = await run(false);
-    if (fallback.error) throw fallback.error;
-    data = fallback.data ?? [];
-    console.log("Fetched scans count:", data.length);
+  const first = await run(SCAN_SELECT_WITH_DETECTION);
+  if (!first.error) {
+    console.log("Fetched scans count:", (first.data ?? []).length);
+    return asRows<HydratedScanRow>(first.data);
   }
-  return asRows<HydratedScanRow>(data);
+  const missingDetection =
+    first.error.code === "42703" || /detected_child|child_detection/i.test(first.error.message ?? "");
+  if (!missingDetection) throw first.error;
+  const fallback = await run(SCAN_SELECT);
+  if (fallback.error) throw fallback.error;
+  console.log("Fetched scans count:", (fallback.data ?? []).length);
+  return asRows<HydratedScanRow>(fallback.data);
 }
 
 async function mergeFetchedScans(scans: HydratedScanRow[]) {
@@ -217,13 +238,16 @@ export async function hydrateRecentScans(childId?: string | null) {
 
 export async function hydrateScanById(scanId: string): Promise<ScanRecord | undefined> {
   if (!scanId || !shouldUseRemote()) return useScanStore.getState().scans[scanId];
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from("scans")
-    .select(
-      "id, parent_id, child_id, original_storage_path, original_purged_at, status, overall_score, created_at, completed_at, subject",
-    )
+    .select(SCAN_SELECT_WITH_DETECTION)
     .eq("id", scanId)
     .maybeSingle();
+  if (error && (error.code === "42703" || /detected_child|child_detection/i.test(error.message ?? ""))) {
+    const fallback = await supabase.from("scans").select(SCAN_SELECT).eq("id", scanId).maybeSingle();
+    data = fallback.data;
+    error = fallback.error;
+  }
   if (error) throw error;
   if (!data) return useScanStore.getState().scans[scanId];
   const scan = data as HydratedScanRow;

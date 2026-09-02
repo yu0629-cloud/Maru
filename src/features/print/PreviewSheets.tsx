@@ -10,7 +10,7 @@ import {
   type PrintDocumentInput,
   type WorksheetItem,
 } from "@/src/features/print/html";
-import { needsDataTableVisual } from "@/src/features/print/lib/figure-boxes.mjs";
+import { figurePlacementOf, needsDataTableVisual, needsInsetFigure } from "@/src/features/print/lib/figure-boxes.mjs";
 import { t } from "@/src/i18n";
 import { normalizeOcrText } from "@/src/features/print/lib/ocr-text.mjs";
 
@@ -21,14 +21,10 @@ function sanitizeStem(text: string) {
     .trim();
 }
 
-function partWantsDataTable(
-  part: { stem?: string; options?: string },
-  context = "",
-) {
+function partWantsDataTable(part: { stem?: string; options?: string }) {
   return needsDataTableVisual({
     questionText: part.stem,
     optionsText: part.options,
-    parentContext: context,
   });
 }
 
@@ -121,7 +117,16 @@ function FigureMedia({
       ? (occupancy.widthPct * 273) / (100 * occupancy.heightMm)
       : 4 / 3;
   return (
-    <View style={{ position: "relative", width: "100%", maxWidth: "100%", marginBottom: 6, alignSelf: "center" }}>
+    <View
+      style={{
+        position: "relative",
+        width: occupancy?.widthPct ? `${Math.min(occupancy.widthPct, 100)}%` : "100%",
+        maxWidth: "100%",
+        marginBottom: 6,
+        marginTop: 4,
+        alignSelf: "center",
+      }}
+    >
       <Image
         source={{ uri: src }}
         resizeMode="contain"
@@ -240,9 +245,10 @@ function WorksheetCell({ item }: { item: WorksheetItem }) {
         <FigureMedia id={`${item.id}-parent`} src={parentSrc} occupancy={parentOcc} masks={item.masks} />
         {parts.map((part, index) => {
           const partStem = stripLeadingQuestionNumber(stripRepeatedLead(part.stem, rawContext));
-          const wantsTable = partWantsDataTable(part, rawContext);
-          const subSrc = part.subFigureSrc || (wantsTable ? item.subFigureSrc : "") || "";
-          const subOcc = part.subOccupancy ?? (wantsTable ? item.subOccupancy : null);
+          const wantsTable = partWantsDataTable(part);
+          const wantsInset = needsInsetFigure({ questionText: part.stem });
+          const subSrc = part.subFigureSrc || (wantsTable || wantsInset ? item.subFigureSrc : "") || "";
+          const subOcc = part.subOccupancy ?? (wantsTable || wantsInset ? item.subOccupancy : null);
           const subKey =
             subOcc && Number.isFinite(subOcc.heightMm)
               ? `occ:${Math.round(Number(subOcc.widthPct) * 10)}:${Math.round(Number(subOcc.heightMm) * 10)}`
@@ -250,12 +256,16 @@ function WorksheetCell({ item }: { item: WorksheetItem }) {
                 ? `src:${String(subSrc).length}:${String(subSrc).slice(40, 88)}`
                 : "";
           const showSub =
-            wantsTable &&
+            Boolean(subSrc) &&
             Boolean(subKey) &&
             !shownSubs.has(subKey) &&
+            (wantsTable || wantsInset) &&
             isDistinctSubFigure(parentSrc, subSrc, parentOcc, subOcc);
           if (showSub && subKey) shownSubs.add(subKey);
           const partOptions = sanitizeStem(stripMarkdownTables(part.options ?? ""));
+          const place = figurePlacementOf({ questionText: part.stem, optionsText: part.options });
+          const insetRight = showSub && place === "right";
+          const insetLeft = showSub && place === "left";
           return (
             <View
               key={`${item.id}-part-${part.numberLabel || part.number}-${index}`}
@@ -264,13 +274,24 @@ function WorksheetCell({ item }: { item: WorksheetItem }) {
                 paddingTop: index === 0 ? 0 : 8,
                 borderTopWidth: index === 0 ? 0 : 1,
                 borderTopColor: "#eee",
+                flexDirection: insetRight || insetLeft ? "row" : "column",
+                alignItems: insetRight || insetLeft ? "flex-start" : undefined,
               }}
             >
+              {insetLeft && showSub ? (
+                <FigureMedia
+                  id={`${item.id}-sub-${part.numberLabel || part.number}-${index}`}
+                  src={subSrc}
+                  occupancy={subOcc}
+                  masks={part.subMasks ?? item.subMasks}
+                />
+              ) : null}
+              <View style={insetRight || insetLeft ? { flex: 1, minWidth: 0 } : undefined}>
               <Text style={{ fontSize: 16, fontWeight: "600", lineHeight: 24, color: "#222", marginBottom: 6 }}>
                 <NumberLabel label={part.numberLabel ?? item.numberLabel} numberStyle={part.numberStyle ?? item.numberStyle} />
                 {partStem}
               </Text>
-              {showSub ? (
+              {!insetRight && !insetLeft && showSub ? (
                 <FigureMedia
                   id={`${item.id}-sub-${part.numberLabel || part.number}-${index}`}
                   src={subSrc}
@@ -281,7 +302,38 @@ function WorksheetCell({ item }: { item: WorksheetItem }) {
               {partOptions ? (
                 <Text style={{ fontSize: 14, lineHeight: 21, color: "#222", marginBottom: 8 }}>{partOptions}</Text>
               ) : null}
-              <PartAnswer hasOptions={Boolean(partOptions)} isFigure />
+              {part.printRole === "prerequisite" ? (
+                <View style={{ alignItems: "flex-end" }}>
+                  <View
+                    style={{
+                      minWidth: 60,
+                      minHeight: 35,
+                      paddingHorizontal: 10,
+                      borderWidth: 2,
+                      borderColor: "#333",
+                      borderRadius: 4,
+                      backgroundColor: "#f3f3f3",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <Text style={{ fontSize: 16, fontWeight: "700", color: "#222" }}>
+                      {String(part.correctAnswer ?? "").trim() || "○"}
+                    </Text>
+                  </View>
+                </View>
+              ) : (
+                <PartAnswer hasOptions={Boolean(partOptions)} isFigure />
+              )}
+              </View>
+              {insetRight && showSub ? (
+                <FigureMedia
+                  id={`${item.id}-sub-${part.numberLabel || part.number}-${index}`}
+                  src={subSrc}
+                  occupancy={subOcc}
+                  masks={part.subMasks ?? item.subMasks}
+                />
+              ) : null}
             </View>
           );
         })}

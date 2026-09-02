@@ -8,10 +8,12 @@ import { EMPTY_TOPIC_MASTERY, useTopicMasteryStore } from "@/src/stores/topicMas
 import {
   applyReviewResult,
   isolateLeeches,
-  selectDailyReviews,
   todayIso,
   type ReviewQueueItem,
 } from "@/src/features/review/select";
+import { archiveStaleRecords, clampReviewStage, selectRecommendedReviews } from "@/src/features/review/question-record";
+import { printProblemsFromScans } from "@/src/features/print/lib/from-reviews.mjs";
+import { useScanStore } from "@/src/stores/scanStore";
 import { displayQuestionText, displayTopicTag, hasPrintableQuestion } from "@/src/features/print/lib/from-reviews.mjs";
 import { useCurrentChild } from "@/src/hooks/useCurrentChild";
 import { t } from "@/src/i18n";
@@ -41,12 +43,33 @@ export function useDailyReviews() {
       .select("id, completed, review_queue_id")
       .eq("child_id", currentChildId)
       .eq("review_date", todayIso());
-    const { data: queueRows } = await supabase
-      .from("review_queue")
-      .select(
-        "id, problem_id, status, next_review_on, interval_days, ease_factor, consecutive_misses, consecutive_hits, last_result, leech_at",
-      )
-      .eq("child_id", currentChildId);
+    const queueSelect =
+      "id, problem_id, status, next_review_on, interval_days, ease_factor, consecutive_misses, consecutive_hits, last_result, leech_at, last_reviewed_at, review_stage, mistake_count, is_archived";
+    const queueResult = await supabase.from("review_queue").select(queueSelect).eq("child_id", currentChildId);
+    const queueFallback = queueResult.error
+      ? await supabase
+          .from("review_queue")
+          .select(
+            "id, problem_id, status, next_review_on, interval_days, ease_factor, consecutive_misses, consecutive_hits, last_result, leech_at, last_reviewed_at",
+          )
+          .eq("child_id", currentChildId)
+      : null;
+    const queueRows = (queueResult.data ?? queueFallback?.data ?? []) as Array<{
+      id: string;
+      problem_id: string;
+      status: ReviewQueueItem["status"];
+      next_review_on: string;
+      interval_days: number;
+      ease_factor: number;
+      consecutive_misses: number;
+      consecutive_hits: number;
+      last_result: boolean | null;
+      leech_at: string | null;
+      last_reviewed_at: string | null;
+      review_stage?: number;
+      mistake_count?: number;
+      is_archived?: boolean;
+    }>;
     const problemIds = (queueRows ?? []).map((row) => row.problem_id);
     const { data: problems } = await supabase
       .from("problems")
@@ -90,6 +113,16 @@ export function useDailyReviews() {
         consecutiveHits: row.consecutive_hits,
         lastResult: row.last_result,
         leechAt: row.leech_at,
+        lastReviewedAt: row.last_reviewed_at,
+        last_reviewed_at: row.last_reviewed_at,
+        reviewStage: clampReviewStage(row.review_stage),
+        review_stage: clampReviewStage(row.review_stage),
+        mistakeCount: (row as { mistake_count?: number }).mistake_count ?? row.consecutive_misses,
+        mistake_count: (row as { mistake_count?: number }).mistake_count ?? row.consecutive_misses,
+        nextReviewAt: row.next_review_on,
+        next_review_at: row.next_review_on,
+        isArchived: (row as { is_archived?: boolean }).is_archived === true || row.status === "retired",
+        is_archived: (row as { is_archived?: boolean }).is_archived === true || row.status === "retired",
         completed: assignment?.completed ?? false,
         label: problem?.problem_label ?? t("common.questionBare"),
         topicTag: displayTopicTag(problem?.unit ?? problem?.topic_tags?.[0], problem?.problem_label),
@@ -115,7 +148,7 @@ export function useDailyReviews() {
         createdAt: problem?.created_at ?? undefined,
       };
     });
-    setItems(mapped);
+    setItems(archiveStaleRecords(mapped));
   }, [currentChildId, mock, setItems]);
 
   const fetchedKeyRef = useRef<string | null>(null);
@@ -130,18 +163,25 @@ export function useDailyReviews() {
   const masteryByKey = useTopicMasteryStore((state) =>
     currentChildId ? state.byChild[currentChildId] ?? EMPTY_TOPIC_MASTERY : EMPTY_TOPIC_MASTERY,
   );
-
-  const printableItems = useMemo(() => items.filter(hasPrintableQuestion), [items]);
+  const scans = useScanStore((state) => state.scans);
+  const printableItems = useMemo(
+    () => archiveStaleRecords(items).filter(hasPrintableQuestion),
+    [items],
+  );
   const selected = useMemo(
     () =>
-      selectDailyReviews(printableItems, {
+      selectRecommendedReviews(printableItems, {
         min: REVIEW_CONFIG.dailyMin,
-        max: REVIEW_CONFIG.dailyMax,
+        max: REVIEW_CONFIG.recommendedMax,
         masteryByKey,
       }),
     [printableItems, masteryByKey],
   );
   const daily = selected.daily;
+  const todayRedo = useMemo(
+    () => printProblemsFromScans(Object.values(scans), currentChildId ?? undefined),
+    [scans, currentChildId],
+  );
   const leeches = useMemo(() => isolateLeeches(printableItems), [printableItems]);
 
   const recordResult = useCallback(
@@ -178,6 +218,8 @@ export function useDailyReviews() {
     mocked: mock,
     items,
     daily,
+    recommended: daily,
+    todayRedo,
     available: selected.available,
     belowMin: selected.belowMin,
     leeches,

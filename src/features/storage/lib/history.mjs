@@ -39,7 +39,7 @@ function createdAtOf(scan, fallbackIso) {
 export function belongsToActiveChild(scan, childId) {
   if (!childId) return true;
   const scanChild = scan?.childId ?? scan?.child_id ?? null;
-  if (scanChild == null || scanChild === "") return true;
+  if (scanChild == null || scanChild === "") return false;
   return scanChild === childId;
 }
 
@@ -60,7 +60,7 @@ export function selectHistoryScans(scans, input = {}) {
       return status === "completed" || status === "inpainting" || scan.confirmed === true;
     });
   const scoped = eligible.filter((scan) => belongsToActiveChild(scan, childId));
-  const rows = (scoped.length > 0 ? scoped : eligible)
+  const rows = scoped
     .map((scan) => ({
       ...scan,
       createdAt: createdAtOf(scan, now),

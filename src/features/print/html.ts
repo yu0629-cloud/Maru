@@ -32,6 +32,8 @@ export type PrintProblem = {
   blankedPath?: string;
   croppedPath?: string;
   originalPath?: string;
+  localUri?: string;
+  printFigureRev?: number;
   bbox?: [number, number, number, number];
   cropBox?: { x: number; y: number; width: number; height: number };
   figureCropBox?: [number, number, number, number] | null;
@@ -85,6 +87,8 @@ export type WorksheetItem = {
     subFigureSrc?: string;
     subOccupancy?: { widthPct: number; heightMm: number } | null;
     subMasks?: Array<{ x: number; y: number; width: number; height: number }>;
+    printRole?: "review" | "prerequisite" | "";
+    correctAnswer?: string;
   }>;
 };
 
@@ -99,7 +103,7 @@ export type PrintDocumentInput = {
   problems: PrintProblem[];
   includeCheatSheet?: boolean;
   perPage?: number;
-  scope?: "daily" | "all";
+  scope?: "today" | "recommended" | "daily" | "all";
 };
 
 export type PrintClipItem = {
@@ -137,6 +141,7 @@ export {
   formatProblemStem,
   resolveQuestionNumber,
   stripLeadingQuestionNumber,
+  referencedPartTokens,
   formatSquareNumber,
   formatRoundNumber,
   matchLeadingQuestionNumber,
@@ -164,12 +169,18 @@ export {
   planExpandedFigureCrop,
   prepareParentFigureBox,
   clipFigureBottomBeforeBelow,
+  forceInsetColumnBox,
+  clipInsetToStemWindow,
   stripRepeatedLead,
   stripMarkdownTables,
   WORKSHEET_PER_PAGE,
   PRINT_ROWS_PER_PAGE,
   A4_CONTENT_WIDTH_MM,
   A4_CONTENT_HEIGHT_MM,
+  INSET_SLOT_OCCUPANCY,
+  PRINT_CROP_REV,
+  acceptFreshPrintFigure,
+  hasRecropSource,
   PRINT_CSS,
   ANSWER_STYLE_LABELS,
   PROBLEM_TYPE_LABELS,
@@ -195,14 +206,27 @@ export {
 
 export {
   needsDataTableVisual,
+  mayInheritDataTable,
   benefitsFromDataTableVisual,
   benefitsFromParentFigure,
+  figureFamilyOf,
+  sameFigureFamily,
+  inferParentFigureBox,
+  inferInsetFigureBox,
+  mergeInsetFigureBox,
+  preferParentFigureBox,
+  trimParentBoxExcludingLead,
+  trimParentBottomBeforeQuestion,
   mentionsDataTable,
   looksLikeParentFigureBox,
   inferTableBoxBelow,
   trimTableBoxExcludingChoices,
   resolveSubFigureBox,
+  resolveInsetFigureBox,
   resolveParentFigureBox,
+  needsInsetFigure,
+  figurePlacementOf,
+  looksLikeInsetFigureBox,
   enrichPrintFigureBoxes,
   earliestStemBelowParent,
 } from "./lib/figure-boxes.mjs";

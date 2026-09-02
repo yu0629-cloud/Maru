@@ -4,6 +4,7 @@ import { ChildSwitcher } from "@/src/components/ChildSwitcher";
 import { ChildScoped } from "@/src/components/ChildScoped";
 import { RecentScansSection } from "@/src/features/scans/RecentScansSection";
 import { CarteMastery } from "@/src/features/carte/CarteMastery";
+import { QuestionRecordList } from "@/src/features/carte/QuestionRecordList";
 import { useCarte } from "@/src/hooks/useCarte";
 import { useEnsureDemoChild } from "@/src/hooks/useEnsureDemoChild";
 import type { LeechAction } from "@/src/features/review/leech";
@@ -34,7 +35,7 @@ export default function CarteScreen() {
 function CarteBody() {
   useEnsureDemoChild();
   const t = useT();
-  const { child, carte, problems, leeches, resolveLeech, mocked } = useCarte();
+  const { child, carte, problems, leeches, records, resolveLeech, markUnderstood, skipRecord, mocked } = useCarte();
   const [busyId, setBusyId] = useState<string | null>(null);
 
   async function run(item: ReviewQueueItem, action: LeechAction) {
@@ -67,6 +68,19 @@ function CarteBody() {
       </View>
 
       <CarteMastery problems={problems ?? []} />
+
+      <Text className="mt-6 font-bold text-ink">{t("carte.recordsTitle")}</Text>
+      <Text className="mt-1 text-sm text-ink/60">{t("carte.recordsHint")}</Text>
+      <QuestionRecordList
+        items={records}
+        busyId={busyId}
+        onMaster={(item) => {
+          void markUnderstood(item);
+        }}
+        onSkip={(item) => {
+          void skipRecord(item);
+        }}
+      />
 
       <Pressable className="mt-4 rounded-2xl bg-white px-4 py-4" onPress={() => push("/(app)/scans")}>
         <Text className="text-center text-lg font-bold text-ink">{t("carte.historyTitle")}</Text>

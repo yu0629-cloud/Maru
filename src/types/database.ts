@@ -174,6 +174,10 @@ export type Database = {
           gemini_raw: Json | null;
           overall_score: OverallScore | null;
           error_message: string | null;
+          detected_child_id: string | null;
+          detected_child_name: string | null;
+          child_detection_reason: string | null;
+          child_detection_matched: boolean;
           created_at: string;
           completed_at: string | null;
         };
@@ -269,6 +273,9 @@ export type Database = {
           last_result: boolean | null;
           last_reviewed_at: string | null;
           leech_at: string | null;
+          review_stage: number;
+          mistake_count: number;
+          is_archived: boolean;
           created_at: string;
         };
         Insert: Partial<Database["public"]["Tables"]["review_queue"]["Row"]> & {
@@ -357,6 +364,10 @@ export type Database = {
       };
       enqueue_incorrect_problems: {
         Args: { p_scan_id: string };
+        Returns: number;
+      };
+      archive_stale_question_records: {
+        Args: { p_child_id?: string };
         Returns: number;
       };
       assign_daily_reviews: {

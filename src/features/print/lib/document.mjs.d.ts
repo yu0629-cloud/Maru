@@ -58,6 +58,10 @@ export const WORKSHEET_PER_PAGE: 6;
 export const PRINT_ROWS_PER_PAGE: 3;
 export const A4_CONTENT_WIDTH_MM: 186;
 export const A4_CONTENT_HEIGHT_MM: 273;
+export const INSET_SLOT_OCCUPANCY: { widthPct: 32; heightMm: 48 };
+export const PRINT_CROP_REV: number;
+export function hasRecropSource(problem?: object | null): boolean;
+export function acceptFreshPrintFigure(problem?: object | null): boolean;
 export function chooseAnswerStyle(input: {
   topicTag?: string;
   unit?: string;
@@ -90,7 +94,7 @@ export function buildPrintHtml(input: {
   dateLabel?: string;
   includeCheatSheet?: boolean;
   perPage?: number;
-  scope?: "daily" | "all";
+  scope?: "today" | "recommended" | "daily" | "all";
   problems: Array<{
     id: string;
     label: string;
@@ -151,6 +155,30 @@ export function geminiBoxToPixelCrop(
 export function expandFigureGeminiBox(
   box?: unknown,
   pad?: number,
+): [number, number, number, number] | null;
+export function looksLikeAnswerSlot(box?: unknown): boolean;
+export function clipInsetBottomBeforeAnswer(
+  expanded?: unknown,
+  original?: unknown,
+  answerBox?: unknown,
+  gap?: number,
+): [number, number, number, number] | null;
+export function forceInsetColumnBox(
+  box?: unknown,
+  options?: { place?: "left" | "right"; floor?: number; asInset?: boolean; stem?: unknown },
+): [number, number, number, number];
+export function clipInsetToStemWindow(
+  expanded?: unknown,
+  stemBox?: unknown,
+): [number, number, number, number] | null;
+export function trimInsetSliverEdges(
+  expanded?: unknown,
+  original?: unknown,
+): [number, number, number, number] | null;
+export function trimInsetNeighborEdges(
+  expanded?: unknown,
+  stem?: unknown,
+  options?: { place?: "left" | "right"; fromSliver?: boolean; keepBottom?: boolean },
 ): [number, number, number, number] | null;
 export function clipFigureBottomBeforeBelow(
   expanded?: unknown,

@@ -31,12 +31,19 @@ const {
   shrinkCropExcludingAnswer,
   coerceGeminiBox,
   cropOccupancyOf,
+  occupancyFromBox,
   geminiBoxToPixelCrop,
   expandFigureGeminiBox,
   prepareParentFigureBox,
   planExpandedFigureCrop,
   clipFigureBottomBeforeBelow,
+  looksLikeAnswerSlot,
+  looksLikeLeftStemColumn,
+  clipInsetBottomBeforeAnswer,
+  clipInsetLeftAfterStem,
   stripRepeatedLead,
+  acceptFreshPrintFigure,
+  PRINT_CROP_REV,
 } = await import(pathToFileURL(printLib).href);
 const { applyReviewResult, isolateLeeches, selectDailyReviews } = await import(
   pathToFileURL(reviewLib).href
@@ -85,6 +92,10 @@ const planned = planExpandedFigureCrop([100, 50, 500, 950], [420, 780, 540, 920]
 assert.ok(planned.cropGemini);
 assert.ok(planned.cropGemini[1] < 50);
 assert.ok(planned.cropGemini[3] > 950);
+const leadOverlap = planExpandedFigureCrop([148, 40, 360, 960], [80, 40, 200, 500], {
+  preserveExtent: true,
+});
+assert.equal(leadOverlap.masks.length, 0, "設問本文の重なりで親図に白帯を出さない");
 pass("大問図は枠を維持し、狭い切り抜きだけ解答欄を除外する");
 
 const thinAnswer = geminiBBoxToNormalizedBox([170, 119, 213, 513]);
@@ -158,6 +169,16 @@ const html = buildPrintHtml({
   problems: printProblems,
 });
 assert.match(html, /size: A4/);
+assert.match(html, new RegExp(`maru-print-crop-rev:${PRINT_CROP_REV}`));
+assert.equal(acceptFreshPrintFigure({ parentFigureSrc: SCAN_PNG }), true);
+assert.equal(acceptFreshPrintFigure({ originalImageSrc: SCAN_PNG, parentFigureSrc: SCAN_PNG }), true);
+assert.equal(acceptFreshPrintFigure({ originalPath: "scans/a.jpg", parentFigureSrc: SCAN_PNG }), false);
+assert.equal(acceptFreshPrintFigure({ localUri: "file:///tmp/scan.jpg", parentFigureSrc: SCAN_PNG }), false);
+assert.equal(acceptFreshPrintFigure({ originalImageSrc: "https://example.com/scan.jpg", parentFigureSrc: SCAN_PNG }), false);
+assert.equal(
+  acceptFreshPrintFigure({ originalPath: "scans/a.jpg", parentFigureSrc: SCAN_PNG, printFigureRev: PRINT_CROP_REV }),
+  true,
+);
 assert.match(html, /margin:\s*12mm/);
 assert.match(html, /なまえ: はると/);
 assert.match(html, /2026年8月26日/);
@@ -177,7 +198,7 @@ assert.doesNotMatch(html, /声かけ/);
 assert.match(html, /3 \+ 4/);
 pass("PDF は間違えた問題だけを集約し、テキストと解答枠で構成する");
 
-const { collectPrintProblems, isIncorrectForPrint, isBlankPrintAnswer, displayQuestionText, displayTopicTag, stripLatexDollars, hasPrintableQuestion, selectProblemsForScope, dedupePrintProblems, DAILY_PRINT_MAX } = await import(
+const { collectPrintProblems, isIncorrectForPrint, isBlankPrintAnswer, displayQuestionText, displayTopicTag, stripLatexDollars, hasPrintableQuestion, selectProblemsForScope, dedupePrintProblems, DAILY_PRINT_MAX, RECOMMENDED_PRINT_MAX } = await import(
   pathToFileURL(join(root, "src/features/print/lib/from-reviews.mjs")).href,
 );
 const scanIncorrects = collectPrintProblems({
@@ -295,6 +316,16 @@ assert.equal(resolveQuestionNumber({ questionText: "(a) 記号を書きなさい
 assert.equal(resolveQuestionNumber({ questionText: "2. おもりの重さ" }).label, "(2)");
 assert.equal(resolveQuestionNumber({ label: "大問1" }).label, "[ 1 ]");
 assert.equal(resolveQuestionNumber({ label: "大問1 (2)" }).label, "(2)");
+const followUp = resolveQuestionNumber({
+  questionText: "(2) (1)の結果から、どのようなことがわかりますか。次の①〜③から選び、番号を書きましょう。",
+});
+assert.equal(followUp.label, "(2)");
+assert.match(followUp.body, /^\(1\)の結果から/);
+const { referencedPartTokens, stripLeadingQuestionNumber } = await import(
+  pathToFileURL(join(root, "src/features/print/lib/question-number.mjs")).href,
+);
+assert.deepEqual(referencedPartTokens("(2) (1)の結果から、どのようなことがわかりますか。"), ["1"]);
+assert.equal(stripLeadingQuestionNumber("(1)の結果から、どのようなことがわかりますか。"), "(1)の結果から、どのようなことがわかりますか。");
 const numberedStem = flattenWorksheetItems([
   {
     id: "n3",
@@ -350,6 +381,118 @@ const squareHtml = buildPrintHtml({
 assert.match(squareHtml, /num-square/);
 assert.match(squareHtml, /\[ 1 \]/);
 pass("設問番号を元プリント記号に応じて正規化し二重連番を出さない");
+
+const followUpPrint = collectPrintProblems({
+  scope: "all",
+  scans: [
+    {
+      childId: "child-1",
+      originalStoragePath: "scans/air.jpg",
+      problems: [
+        {
+          id: "air-1",
+          is_correct: true,
+          student_answer: "1",
+          problem_label: "(1)",
+          parent_context: "下の図のように、集気びんの中でろうそくを燃やすと、21秒後に火が消えました。",
+          question_text: "(1) 右の図のように、ろうそくを燃やした後の集気びんに、火のついたろうそくを入れると、ろうそくの火はどうなりますか。",
+          options_text: "① すぐに消える ② 10秒ほど燃えて消える ③ 21秒ほど燃えて消える",
+          correct_answer: "1",
+          visual_type: "has_figure",
+          parent_figure_box: [40, 50, 380, 950],
+        },
+        {
+          id: "air-2",
+          is_correct: false,
+          problem_label: "(2)",
+          parent_context: "下の図のように、集気びんの中でろうそくを燃やすと、21秒後に火が消えました。",
+          question_text: "(2) (1)の結果から、どのようなことがわかりますか。次の①〜③から選び、番号を書きましょう。",
+          options_text: "① 空気がなくなる ② 空気の成分が変わる ③ 空気の成分は変わらない",
+          visual_type: "has_figure",
+          parent_figure_box: [40, 50, 380, 950],
+        },
+      ],
+    },
+  ],
+});
+assert.equal(followUpPrint.length, 2);
+assert.equal(followUpPrint[0].id, "air-1");
+assert.equal(followUpPrint[0].printRole, "prerequisite");
+assert.equal(followUpPrint[1].id, "air-2");
+const followUpItems = flattenWorksheetItems(followUpPrint.map((item) => ({
+  ...item,
+  parentFigureSrc: SCAN_PNG,
+  printFigureRev: PRINT_CROP_REV,
+  isCorrect: item.printRole === "prerequisite" ? true : false,
+})));
+assert.equal(followUpItems.length, 1);
+assert.equal(followUpItems[0].parts.length, 2);
+assert.match(followUpItems[0].parts[0].stem, /火のついたろうそく/);
+assert.match(followUpItems[0].parts[1].stem, /\(1\)の結果から/);
+const followUpHtml = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月31日",
+  problems: followUpPrint.map((item) => ({
+    ...item,
+    parentFigureSrc: SCAN_PNG,
+    printFigureRev: PRINT_CROP_REV,
+    isCorrect: item.printRole === "prerequisite" ? true : false,
+  })),
+});
+assert.match(followUpHtml, /\(1\)の結果から/);
+assert.match(followUpHtml, /火のついたろうそく/);
+assert.doesNotMatch(followUpHtml, />\(2\)\s*の結果から/);
+assert.match(followUpHtml, /answer-box-filled">1</);
+assert.equal((followUpHtml.match(/answer-box-filled">/g) ?? []).length, 1);
+assert.match(followUpHtml, /class="answer-box">&nbsp;/);
+pass("続き問題は前問を残し、(1)の結果から の番号を消さない");
+
+const followUpIndexed = collectPrintProblems({
+  scope: "all",
+  scans: [
+    {
+      childId: "child-1",
+      originalStoragePath: "scans/air.jpg",
+      problems: [
+        {
+          id: "air-i1",
+          is_correct: true,
+          student_answer: "1",
+          problem_index: "1-(1)",
+          problem_label: "1-(1)",
+          parent_context: "下の図のように、集気びんの中でろうそくを燃やすと、21秒後に火が消えました。",
+          question_text: "(1) 右の図のように、火のついたろうそくを入れると、ろうそくの火はどうなりますか。",
+          options_text: "① すぐに消える ② 10秒 ③ 21秒",
+          correct_answer: "1",
+          visual_type: "has_figure",
+        },
+        {
+          id: "air-i2",
+          is_correct: false,
+          problem_index: "1-(2)",
+          problem_label: "1-(2)",
+          parent_context: "下の図のように、集気びんの中でろうそくを燃やすと、21秒後に火が消えました。",
+          question_text: "(2) (1)の結果から、どのようなことがわかりますか。次の①〜③から選び、番号を書きましょう。",
+          options_text: "① 空気がなくなる ② 空気の成分が変わる ③ 変わらない",
+          visual_type: "has_figure",
+        },
+      ],
+    },
+  ],
+});
+assert.equal(followUpIndexed.length, 2, "1-(1) と 1-(2) を同一小問として落とさない");
+assert.equal(followUpIndexed.some((row) => row.id === "air-i2"), true);
+const followUpIndexedItems = flattenWorksheetItems(
+  followUpIndexed.map((item) => ({
+    ...item,
+    parentFigureSrc: SCAN_PNG,
+    printFigureRev: PRINT_CROP_REV,
+    isCorrect: item.printRole === "prerequisite",
+  })),
+);
+assert.equal(followUpIndexedItems[0].parts.length, 2);
+assert.match(followUpIndexedItems[0].parts[1].stem, /\(1\)の結果から/);
 
 assert.equal(displayQuestionText("14", "14"), "");
 assert.equal(displayQuestionText("2 + 6 =", "14"), "2 + 6 =");
@@ -536,6 +679,13 @@ assert.equal(inferVisualType({ questionText: "下の表にまとめなさい。"
 assert.equal(
   inferVisualType({
     visualType: "text_only",
+    questionText: "(4) ウの上のすき間に線香のけむりを近づけると、どのように動きますか。",
+  }),
+  "has_figure",
+);
+assert.equal(
+  inferVisualType({
+    visualType: "text_only",
     questionText: "(6) 実験の結果を表にまとめると、正しいものをすべて選びなさい。",
     parent_figure_box: [40, 50, 380, 950],
     sub_figure_box: [500, 80, 720, 900],
@@ -565,14 +715,16 @@ assert.equal(filePx.originY, 80);
 assert.equal(filePx.width, 200);
 assert.equal(filePx.height, 160);
 pass("crop_box の JSON 文字列・正規化座標をピクセルに変換する");
-const paddedFigure = expandFigureGeminiBox([100, 50, 500, 950]);
+const paddedFigure = expandFigureGeminiBox([200, 50, 500, 950]);
 assert.ok(paddedFigure);
-assert.ok(paddedFigure[0] < 100);
+assert.ok(paddedFigure[0] < 200);
 assert.ok(paddedFigure[1] < 50);
 assert.ok(paddedFigure[2] > 500);
 assert.ok(paddedFigure[3] > 950);
-assert.ok(paddedFigure[1] < 50);
 assert.ok(paddedFigure[2] <= 515);
+const nearLead = expandFigureGeminiBox([40, 50, 380, 950]);
+assert.ok(nearLead);
+assert.ok(nearLead[0] >= 40, "リード文帯へ上に広げない");
 // 解答欄 bbox の上にある設問本文も図に残さない
 const clipped = clipFigureBottomBeforeBelow(
   expandFigureGeminiBox([200, 40, 480, 960]),
@@ -649,6 +801,75 @@ const fromJsonCrop = printProblemFromReview({
 });
 assert.deepEqual(fromJsonCrop.figureCropBox, [100, 50, 400, 900]);
 assert.equal(fromJsonCrop.visualType, "has_figure");
+const droppedGradeCrops = printProblemFromReview({
+  id: "stale-crop",
+  questionText: "(1) 右の図のように火を入れると",
+  figureImageSrc: FIGURE_PNG,
+  figureBase64: FIGURE_PNG,
+  parentFigureSrc: FIGURE_PNG,
+  subFigureSrc: FIGURE_PNG,
+  correctAnswer: "1",
+  parentCoachingTip: "",
+  isCorrect: false,
+});
+assert.equal(droppedGradeCrops.figureImageSrc, "");
+assert.equal(droppedGradeCrops.figureBase64, "");
+assert.equal(droppedGradeCrops.parentFigureSrc, "");
+assert.equal(droppedGradeCrops.subFigureSrc, "");
+const prefersLocalPage = printProblemFromReview({
+  id: "page-src",
+  questionText: "(1) 右の図のように",
+  originalImageSrc: FIGURE_PNG,
+  localUri: "file:///tmp/full-page.jpg",
+  originalPath: "scans/a.jpg",
+  correctAnswer: "1",
+  parentCoachingTip: "",
+  isCorrect: false,
+});
+assert.equal(prefersLocalPage.originalImageSrc, "file:///tmp/full-page.jpg");
+assert.equal(prefersLocalPage.localUri, "file:///tmp/full-page.jpg");
+assert.equal(prefersLocalPage.figureImageSrc, "");
+const staleKeptOut = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年9月1日",
+  problems: [
+    {
+      id: "stale-fig",
+      label: "(1)",
+      questionText: "(1) 右の図のように火を入れると",
+      visualType: "has_figure",
+      parentFigureBox: [148, 48, 330, 960],
+      parentFigureSrc: FIGURE_PNG,
+      originalPath: "scans/a.jpg",
+      isCorrect: false,
+      correctAnswer: "1",
+      parentCoachingTip: "",
+    },
+  ],
+});
+assert.doesNotMatch(staleKeptOut, /data:image\/png;base64,iVBORw0KGgo/);
+const freshKeptIn = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年9月1日",
+  problems: [
+    {
+      id: "fresh-fig",
+      label: "(1)",
+      questionText: "(1) 右の図のように火を入れると",
+      visualType: "has_figure",
+      parentFigureBox: [148, 48, 330, 960],
+      parentFigureSrc: FIGURE_PNG,
+      originalPath: "scans/a.jpg",
+      printFigureRev: PRINT_CROP_REV,
+      isCorrect: false,
+      correctAnswer: "1",
+      parentCoachingTip: "",
+    },
+  ],
+});
+assert.match(freshKeptIn, /data:image\/png;base64,iVBORw0KGgo/);
 pass("JSON 文字列の crop_box をお直し問題に載せる");
 const figureHtml = buildPrintHtml({
   title: "お直し",
@@ -702,7 +923,7 @@ assert.match(figureHtml, /--crop-w:\d+(\.\d+)?%/);
 assert.match(figureHtml, /--crop-h:\d+(\.\d+)?mm/);
 assert.match(figureHtml, /parent-figure/);
 assert.match(figureHtml, /parent-figure img \{\s*max-height: 68mm/);
-assert.match(figureHtml, /sub-figure img \{\s*max-height: none/);
+assert.match(figureHtml, /sub-figure img \{\s*max-height: 92mm/);
 assert.doesNotMatch(figureHtml, /max-height:\s*118mm/);
 assert.doesNotMatch(figureHtml, /max-height:\s*85mm/);
 assert.match(figureHtml, /answer-frame/);
@@ -792,6 +1013,7 @@ const groupedProblems = [
     visualType: "has_figure",
     problemType: "math_geometry_graph",
     originalPath: "scans/clock.jpg",
+    printFigureRev: PRINT_CROP_REV,
     figureBase64: FIGURE_PNG,
     figureCropBox: [200, 200, 700, 800],
     questionText: "何時何分ですか",
@@ -806,6 +1028,7 @@ const groupedProblems = [
     visualType: "has_figure",
     problemType: "math_geometry_graph",
     originalPath: "scans/clock.jpg",
+    printFigureRev: PRINT_CROP_REV,
     figureBase64: FIGURE_PNG,
     figureCropBox: [210, 190, 690, 810],
     questionText: "あと何分で4時ですか",
@@ -859,14 +1082,14 @@ const threeParts = explodeFigureItemsForPages([
     parts: [
       { number: 1, numberLabel: "(1)", stem: "変える条件は何ですか。" },
       { number: 3, numberLabel: "(3)", stem: "実験の結果を表にまとめると" },
-      { number: 4, numberLabel: "(4)", stem: "ウの上と下のすき間に線香のけむりを近づけると" },
+      { number: 5, numberLabel: "(5)", stem: "おもりの位置を変えると、うではどうなりますか。" },
     ],
   },
 ]);
 assert.equal(threeParts.length, 2);
 assert.equal(threeParts[0].parts.length, 2);
 assert.equal(threeParts[1].parts.length, 1);
-assert.equal(threeParts[1].parentFigureSrc, "");
+assert.equal(threeParts[1].parentFigureSrc, FIGURE_PNG);
 const threeHtml = buildPrintHtml({
   title: "お直し",
   childName: "はると",
@@ -880,6 +1103,7 @@ const threeHtml = buildPrintHtml({
       visualType: "has_figure",
       problemType: "science_social_diagram",
       originalPath: "scans/lever.jpg",
+      printFigureRev: PRINT_CROP_REV,
       parentContext: "てこが水平につり合う条件を調べました。",
       parentFigureSrc: FIGURE_PNG,
       parentFigureBox: [40, 50, 380, 950],
@@ -895,6 +1119,7 @@ const threeHtml = buildPrintHtml({
       visualType: "has_figure",
       problemType: "science_social_diagram",
       originalPath: "scans/lever.jpg",
+      printFigureRev: PRINT_CROP_REV,
       parentContext: "てこが水平につり合う条件を調べました。",
       parentFigureSrc: FIGURE_PNG,
       parentFigureBox: [40, 50, 380, 950],
@@ -910,6 +1135,7 @@ const threeHtml = buildPrintHtml({
       visualType: "has_figure",
       problemType: "science_social_diagram",
       originalPath: "scans/lever.jpg",
+      printFigureRev: PRINT_CROP_REV,
       parentContext: "てこが水平につり合う条件を調べました。",
       parentFigureSrc: FIGURE_PNG,
       parentFigureBox: [40, 50, 380, 950],
@@ -934,6 +1160,7 @@ const pathVariantProblems = [
     visualType: "has_figure",
     problemType: "science_social_diagram",
     originalPath: "user/scan-abc/original.jpg",
+    printFigureRev: PRINT_CROP_REV,
     parentContext: "下の図のような手順で、てこが水平につり合うのはどれですか。",
     parentFigureSrc: FIGURE_PNG,
     parentFigureBox: [40, 50, 380, 950],
@@ -950,6 +1177,7 @@ const pathVariantProblems = [
     visualType: "has_figure",
     problemType: "science_social_diagram",
     originalPath: "file:///cache/original.jpg",
+    printFigureRev: PRINT_CROP_REV,
     parentContext: "下の図のような手順で、てこが水平につり合うのはどれですか。",
     parentFigureSrc: FIGURE_PNG,
     subFigureSrc: FIGURE_PNG,
@@ -976,7 +1204,7 @@ assert.equal((pathHtml.match(/class="figure-media sub-figure"/g) ?? []).length, 
 assert.equal((pathHtml.match(/変えるものを選びなさい/g) ?? []).length, 1);
 assert.equal((pathHtml.match(/実験の結果を表にまとめると/g) ?? []).length, 1);
 assert.match(pathHtml, /parent-figure img \{\s*max-height: 68mm/);
-assert.match(pathHtml, /sub-figure img \{\s*max-height: none/);
+assert.match(pathHtml, /sub-figure img \{\s*max-height: 92mm/);
 const twoFigures = buildPrintHtml({
   title: "お直し",
   childName: "はると",
@@ -991,6 +1219,7 @@ const twoFigures = buildPrintHtml({
       visualType: "has_figure",
       problemType: "science_social_diagram",
       originalPath: "scans/candle.jpg",
+      printFigureRev: PRINT_CROP_REV,
       parentContext: "下の㋐〜㋓のようにして、ろうそくの燃え方を比べました。",
       parentFigureSrc: FIGURE_PNG,
       parentFigureBox: [70, 40, 420, 960],
@@ -1254,8 +1483,9 @@ const q2Second = q2TableHtml.indexOf("<img ", q2First + 1);
 assert.ok(q2At > q2First && q2Second > q2At);
 pass("小問(2)のデータ表を本文直下に必ず描画する");
 
-const { enrichPrintFigureBoxes, resolveSubFigureBox, resolveParentFigureBox, needsDataTableVisual, benefitsFromParentFigure } =
+const { enrichPrintFigureBoxes, resolveSubFigureBox, resolveParentFigureBox, resolveInsetFigureBox, needsDataTableVisual, needsInsetFigure, figurePlacementOf, looksLikeInsetFigureBox, looksLikeParentFigureBox, benefitsFromParentFigure, inferParentFigureBox, inferInsetFigureBox, mergeInsetFigureBox, figureFamilyOf, trimParentBoxExcludingLead, trimParentBottomBeforeQuestion } =
   await import(pathToFileURL(join(root, "src/features/print/lib/figure-boxes.mjs")).href);
+const { raiseCropBelowLead } = await import(pathToFileURL(join(root, "src/features/print/lib/bbox.mjs")).href);
 assert.equal(
   needsDataTableVisual({
     questionText: "(3) 実験の結果を表にまとめると下のようになりました。",
@@ -1266,9 +1496,353 @@ assert.equal(
   needsDataTableVisual({
     questionText: "(3) 実験の結果から正しいものをすべて選びなさい。",
   }),
-  true,
+  false,
+);
+assert.equal(
+  needsDataTableVisual({
+    parentContext: "下の図のように、集気びんの中でろうそくを燃やすと、21秒後に火が消えました。",
+    questionText: "(2) の結果から、どのようなことがわかりますか。次の①〜③から選び、番号を書きましょう。",
+  }),
+  false,
 );
 assert.equal(benefitsFromParentFigure({ questionText: "(3) 実験の結果を表にまとめると下のようになりました。" }), true);
+assert.equal(
+  benefitsFromParentFigure({
+    questionText: "(4) ウの上のすき間に線香のけむりを近づけると、どのように動きますか。",
+  }),
+  true,
+);
+assert.equal(figureFamilyOf({ questionText: "(4) ウの上のすき間に線香のけむりを近づけると" }), "candle");
+assert.deepEqual(
+  inferParentFigureBox({
+    questionText: "(4) ウの上のすき間に線香のけむりを近づけると",
+  }),
+  [88, 48, 430, 960],
+);
+assert.deepEqual(
+  trimParentBoxExcludingLead([40, 50, 380, 950], {
+    parentContext: "下の図のように、集気びんの中でろうそくを燃やすと、21秒後に火が消えました。",
+  }),
+  [176, 50, 380, 950],
+);
+// 実PDF: リード＋図だけの短い箱。y=200 まで上げると残り不足で何もしなかった
+const shortLeadBox = [40, 50, 186, 950];
+const shortTrimmed = raiseCropBelowLead(shortLeadBox);
+assert.ok(shortTrimmed);
+assert.ok(shortTrimmed[0] >= 128, "短い箱でも『下の図のように』を外す");
+assert.ok(shortTrimmed[0] <= 148);
+assert.equal(shortTrimmed[2], 186);
+assert.ok(shortTrimmed[2] - shortTrimmed[0] >= 50);
+assert.deepEqual(
+  trimParentBoxExcludingLead(shortLeadBox, { questionText: "(1)の結果から、どのようなことがわかりますか。" }),
+  shortTrimmed,
+  "短い箱は本文に「下の図」が無くてもリードを外す",
+);
+assert.deepEqual(raiseCropBelowLead(shortTrimmed), shortTrimmed, "二重に切らない");
+// 実機ログ 2026-08-31: parentBox [138,155,322,965] → originY=154 のままリードが残った
+assert.deepEqual(raiseCropBelowLead([138, 155, 322, 965]), [148, 155, 322, 965]);
+const parentJars = expandFigureGeminiBox([148, 155, 322, 965]);
+assert.ok(parentJars);
+assert.ok(parentJars[0] <= 148, "親図のふた・ラベルを切らない");
+assert.ok(parentJars[0] >= 148, "テキスト済みのリード文は図に戻さない");
+const tightParentBody = expandFigureGeminiBox([180, 155, 322, 965]);
+assert.ok(tightParentBody);
+assert.ok(tightParentBody[0] < 180, "Geminiが図本体だけでも上ラベル分を足す");
+assert.ok(tightParentBody[0] >= 155, "リード段落までは戻さない");
+assert.ok(parentJars[1] <= 36, "左の「底のない集気びん」ラベル");
+assert.ok(parentJars[2] >= 350, "集気びんのねん土の底");
+const parentKeptBesideInset = prepareParentFigureBox(
+  [148, 155, 322, 965],
+  [332, 683, 508, 930],
+);
+assert.deepEqual(parentKeptBesideInset, [148, 155, 322, 965], "横の差し込みで親図の下端を削らない");
+const parentAteQuestion = trimParentBottomBeforeQuestion([148, 48, 500, 960], {
+  questionText: "(1) 右の図のように、火のついたろうそくを入れると",
+});
+assert.ok(parentAteQuestion[2] <= 350, "親図に (1) 本文と差し込みを入れない");
+assert.ok(parentAteQuestion[2] >= 300, "ねん土は残す");
+const insetHand = expandFigureGeminiBox([332, 683, 508, 930], undefined, { asInset: true });
+assert.ok(insetHand);
+assert.ok(insetHand[0] <= 328, "差し込み図の手");
+assert.ok(insetHand[0] >= 300, "親図の右パネルを巻き込まない");
+assert.ok(insetHand[2] >= 548, "差し込み図のびん底・ねん土");
+assert.ok(insetHand[3] >= 920, "右の図の右端キャプションを切らない");
+assert.ok(insetHand[1] <= 640, "右の図の左のろうそくを切らない");
+const crushedInset = expandFigureGeminiBox([460, 680, 556, 910], undefined, { asInset: true });
+assert.ok(crushedInset[2] - crushedInset[0] >= 160, "潰れた差し込み箱でもびんが入る高さ");
+assert.ok(crushedInset[1] <= 630, "右カラムを確保");
+const sliverInset = expandFigureGeminiBox([350, 670, 454, 987], undefined, { asInset: true });
+assert.ok(sliverInset[2] - sliverInset[0] >= 160, "親図との境の細い帯でもびん全体");
+assert.ok(sliverInset[2] - sliverInset[0] <= 230, "次の小問まで伸ばさない");
+assert.ok(sliverInset[3] - sliverInset[1] <= 300, "ページ右の空き余白を広げすぎない");
+assert.ok(sliverInset[0] >= 318, "親図のびん底を主にしない");
+assert.ok(sliverInset[1] <= 630);
+assert.ok(sliverInset[3] <= 960, "図の右端は残す");
+const sliverPx = geminiBoxToPixelCrop(sliverInset, 960, 1280);
+assert.ok(sliverPx);
+assert.ok(sliverPx.height >= 190, "960x1280でびん・手が入る高さ");
+assert.ok(sliverPx.width >= 220, "右カラム幅");
+const sliverLeftAnswer = planExpandedFigureCrop([350, 670, 454, 987], [340, 40, 620, 640], {
+  preserveExtent: true,
+  asInset: true,
+});
+assert.ok(sliverLeftAnswer.cropGemini[2] - sliverLeftAnswer.cropGemini[0] >= 168, "台座まで入る高さ");
+assert.ok(sliverLeftAnswer.cropGemini[2] <= 545, "次の小問までは伸ばさない");
+assert.ok(sliverLeftAnswer.cropGemini[2] >= 520, "びんの台座を切らない");
+assert.ok(sliverLeftAnswer.cropGemini[1] >= 660, "本文列の切れ端を差し込みに残さない");
+assert.ok(sliverLeftAnswer.cropGemini[1] <= 690, "切れ端は1回だけ落とし、図の左端は残す");
+assert.ok(sliverLeftAnswer.cropGemini[3] >= 880, "ページ右端側は詰めない");
+const sliverFullWidthStem = planExpandedFigureCrop([350, 670, 454, 987], [340, 40, 620, 960], {
+  preserveExtent: true,
+  asInset: true,
+});
+assert.ok(sliverFullWidthStem.cropGemini[1] >= 660, "全幅の設問箱でも本文列の切れ端を入れない");
+assert.ok(sliverFullWidthStem.cropGemini[3] >= 880, "全幅設問でも図の右端は詰めない");
+assert.ok(sliverFullWidthStem.cropGemini[3] - sliverFullWidthStem.cropGemini[1] >= 180, "図本体の幅は残す");
+assert.ok(sliverFullWidthStem.cropGemini[0] >= 348, "親図の底を差し込みに残さない");
+const packedInset = expandFigureGeminiBox([348, 652, 536, 900], undefined, { asInset: true });
+assert.ok(packedInset[2] <= 540, "台座まで入った差し込みを印字で再拡張しない");
+assert.ok(packedInset[0] >= 340);
+const shortPacked = expandFigureGeminiBox([348, 652, 514, 940], undefined, { asInset: true });
+assert.ok(shortPacked[2] >= 530, "台座が欠けた差し込みは下を戻す");
+assert.equal(looksLikeAnswerSlot([560, 820, 620, 960]), true);
+assert.equal(looksLikeAnswerSlot([340, 40, 620, 640]), false, "設問本文全体は解答欄ではない");
+const insetBeforeAnswer = planExpandedFigureCrop([332, 683, 508, 930], [560, 820, 620, 960], {
+  preserveExtent: true,
+  asInset: true,
+});
+assert.ok(insetBeforeAnswer.cropGemini);
+assert.ok(insetBeforeAnswer.cropGemini[2] <= 556, "前回の解答欄を差し込みに入れない");
+assert.ok(insetBeforeAnswer.cropGemini[2] >= 508, "びん底は残す");
+const insetBeforeStem = planExpandedFigureCrop([332, 683, 508, 930], [340, 40, 620, 960], {
+  preserveExtent: true,
+  asInset: true,
+});
+assert.ok(insetBeforeStem.cropGemini[2] <= 560, "設問の解答帯は差し込みに入れない");
+assert.ok(insetBeforeStem.cropGemini[2] >= 508, "びん底は残す");
+assert.equal(looksLikeLeftStemColumn([340, 40, 620, 640]), true);
+assert.equal(looksLikeLeftStemColumn([560, 820, 620, 960]), false);
+const insetLeftOfStem = planExpandedFigureCrop([332, 683, 508, 930], [340, 40, 620, 640], {
+  preserveExtent: true,
+  asInset: true,
+});
+assert.ok(insetLeftOfStem.cropGemini[1] >= 660, "差し込みに設問本文列の切れ端を入れない");
+assert.ok(insetLeftOfStem.cropGemini[3] - insetLeftOfStem.cropGemini[1] >= 200, "図本体の幅は残す");
+const mathRightInset = planExpandedFigureCrop([410, 540, 500, 920], [400, 40, 620, 520], {
+  preserveExtent: true,
+  asInset: true,
+});
+assert.ok(mathRightInset.cropGemini[1] <= 580, "本文列が短い算数でも図の左を右へ押し付けない");
+assert.ok(mathRightInset.cropGemini[1] >= 540, "本文の切れ端は入れない");
+assert.ok(mathRightInset.cropGemini[3] >= 880, "図の右端は詰めない");
+const socialRightInset = planExpandedFigureCrop([360, 580, 530, 940], [350, 40, 720, 560], {
+  preserveExtent: true,
+  asInset: true,
+});
+assert.ok(socialRightInset.cropGemini[1] >= 560, "資料図の左に本文切れ端を残さない");
+assert.ok(socialRightInset.cropGemini[3] >= 900, "資料図の右端はページ余白側を詰めない");
+assert.ok(socialRightInset.cropGemini[0] <= 360, "資料図の上は維持する");
+const leftPageInset = planExpandedFigureCrop([180, 50, 460, 360], [180, 400, 520, 920], {
+  preserveExtent: true,
+  asInset: true,
+  place: "left",
+});
+assert.ok(leftPageInset.cropGemini[1] <= 50, "左の図はページ左端を維持する");
+assert.ok(leftPageInset.cropGemini[3] <= 400, "左の図の右は本文列側だけ整える");
+const clippedLeft = clipInsetLeftAfterStem([284, 520, 556, 992], [340, 40, 620, 640]);
+assert.ok(clippedLeft[1] >= 640);
+const clippedFullWidth = clipInsetLeftAfterStem([332, 630, 520, 940], [340, 40, 620, 960]);
+assert.ok(clippedFullWidth[1] >= 640, "全幅 bbox でも左の本文列で止める");
+assert.ok(clippedFullWidth[3] - clippedFullWidth[1] >= 180);
+const tightLid = expandFigureGeminiBox([360, 760, 470, 910], undefined, { asInset: true });
+assert.ok(tightLid);
+assert.ok(tightLid[0] <= 360, "狭い箱でも矢印・ふたを親図へ戻して取らない");
+assert.ok(tightLid[0] >= 318, "親図のびん底を巻き込まない");
+assert.ok(tightLid[1] <= 640, "狭い箱でも左のろうそくを切らない");
+assert.ok(tightLid[2] >= 520, "狭い箱でもびん本体を切らない");
+assert.ok(tightLid[2] - tightLid[0] <= 230, "狭い箱を次の小問まで伸ばさない");
+const clippedInset = clipInsetBottomBeforeAnswer(
+  insetHand,
+  [332, 683, 508, 930],
+  [560, 820, 620, 960],
+);
+assert.ok(clippedInset);
+assert.ok(clippedInset[2] <= 556);
+assert.ok(clippedInset[2] >= 508);
+const leftInsetBox = [180, 50, 460, 360];
+assert.equal(looksLikeInsetFigureBox(leftInsetBox), true, "左カラムの狭い図も差し込み");
+assert.equal(looksLikeParentFigureBox(leftInsetBox), false);
+assert.equal(figurePlacementOf({ questionText: "(1) 左の図のアは何を表しますか。" }), "left");
+const leftInsetPad = expandFigureGeminiBox(leftInsetBox, undefined, { asInset: true });
+assert.ok(leftInsetPad[0] < 180, "左差し込みの上ラベル");
+assert.ok(leftInsetPad[2] > 508, "左差し込みの底");
+const leverArm = expandFigureGeminiBox([80, 70, 360, 720]);
+assert.ok(leverArm[3] >= 800, "てこの右うで目盛");
+assert.ok(leverArm[0] >= 70, "てこ図をリード文へ広げない");
+const lowerTube = expandFigureGeminiBox([540, 80, 820, 900]);
+assert.ok(lowerTube[0] < 540, "ページ下の図は表扱いにせず上を残す");
+assert.ok(lowerTube[2] > 820, "ページ下の図の下端");
+assert.deepEqual(
+  inferParentFigureBox({
+    questionText: "(1) てこが水平につり合うのはどれですか。",
+  }),
+  [88, 48, 400, 960],
+);
+assert.deepEqual(
+  inferParentFigureBox({
+    questionText: "(1) 右の図のように、火のついたろうそくを入れると",
+  }),
+  [88, 48, 330, 960],
+);
+const inferredInset = inferInsetFigureBox({
+  questionText: "(1) 右の図のように、火のついたろうそくを入れると",
+  parentFigureBox: [148, 48, 330, 960],
+});
+assert.ok(looksLikeInsetFigureBox(inferredInset), "右の図は親の下・右カラム");
+assert.ok(inferredInset[0] >= 300, "差し込みの手・矢印を切らない");
+assert.ok(inferredInset[0] <= 360, "親図のすぐ下から取る");
+assert.ok(inferredInset[1] >= 600 && inferredInset[1] <= 660, "右カラム（設問本文の右）");
+assert.ok(inferredInset[3] >= 850 && inferredInset[3] <= 960, "右カラム幅（余白まで広げない）");
+const parentRightPanel = [80, 650, 340, 900];
+const insetNotParentPanel = resolveInsetFigureBox({
+  questionText: "(1) 右の図のように、火のついたろうそくを入れると",
+  parentFigureBox: [148, 48, 330, 960],
+  crop_box: parentRightPanel,
+});
+assert.ok(insetNotParentPanel);
+assert.ok(insetNotParentPanel[0] >= 300, "親図の右パネルを差し込みに使わない");
+assert.ok(insetNotParentPanel[1] >= 500);
+assert.ok(insetNotParentPanel[3] >= 850);
+const inferredTallStem = inferInsetFigureBox({
+  questionText: "(1) 右の図のように、火のついたろうそくを入れると",
+  parentFigureBox: [148, 48, 500, 960],
+  bbox: [430, 850, 510, 950],
+});
+assert.ok(looksLikeInsetFigureBox(inferredTallStem), "親箱が小問まで伸びていても差し込みになる");
+assert.ok(inferredTallStem[0] <= 360, "差し込みは親図の直下から");
+assert.ok(inferredTallStem[0] >= 300);
+assert.ok(inferredTallStem[2] - inferredTallStem[0] >= 150, "図上の書き込みでびんを切らない");
+assert.ok(inferredTallStem[2] - inferredTallStem[0] <= 220, "次の小問まで伸ばさない");
+assert.ok(inferredTallStem[1] >= 500);
+const inferredTallNoStem = inferInsetFigureBox({
+  questionText: "(1) 右の図のように、火のついたろうそくを入れると",
+  parentFigureBox: [148, 48, 500, 960],
+});
+assert.ok(inferredTallNoStem[0] <= 380, "bbox が無くても縦に伸びた親箱の下側を使わない");
+assert.ok(inferredTallNoStem[0] >= 300);
+assert.ok(inferredTallNoStem[1] >= 500);
+const inferredLeft = inferInsetFigureBox({
+  questionText: "(1) 左の図のアは何を表しますか。",
+  parentFigureBox: [148, 48, 330, 960],
+});
+assert.equal(figurePlacementOf({ questionText: "(1) 左の図のアは何を表しますか。" }), "left");
+assert.ok(inferredLeft[3] <= 400, "左の図は左カラム");
+const followUpEnriched = enrichPrintFigureBoxes(followUpPrint);
+assert.ok(looksLikeInsetFigureBox(followUpEnriched[0].subFigureBox), "続きの前問に右の図を付ける");
+assert.equal(needsInsetFigure(followUpEnriched[1]), false);
+const followUpHtmlInset = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月31日",
+  problems: followUpEnriched.map((item) => ({
+    ...item,
+    parentFigureSrc: SCAN_PNG,
+    printFigureRev: PRINT_CROP_REV,
+    subFigureSrc: looksLikeInsetFigureBox(item.subFigureBox) ? FIGURE_PNG : "",
+    isCorrect: item.printRole === "prerequisite" ? true : false,
+  })),
+});
+assert.match(followUpHtmlInset, /inset-figure/);
+assert.equal((followUpHtmlInset.match(/class="[^"]*inset-figure/g) ?? []).length, 1, "差し込みは右の図の小問だけ");
+assert.equal((followUpHtmlInset.match(/<img /g) ?? []).length, 2);
+const q2Html = followUpHtmlInset.slice(followUpHtmlInset.indexOf("(1)の結果から"));
+assert.doesNotMatch(q2Html, /class="[^"]*inset-figure/, "問2に問1の差し込み図を繰り返さない");
+const tallRightMix = [168, 620, 510, 950];
+assert.equal(looksLikeInsetFigureBox(tallRightMix), true);
+assert.equal(looksLikeParentFigureBox(tallRightMix), false);
+assert.equal(needsInsetFigure({ questionText: "(1) 右の図のように、火のついたろうそくを入れると" }), true);
+assert.deepEqual(
+  resolveParentFigureBox({
+    questionText: "(1) 右の図のように、火のついたろうそくを入れると",
+    parentContext: "下の図のように、集気びんの中でろうそくを燃やすと、21秒後に火が消えました。",
+    parentFigureBox: tallRightMix,
+    crop_box: tallRightMix,
+  }),
+    [176, 48, 330, 960],
+);
+const resolvedColumn = resolveInsetFigureBox({
+  questionText: "(1) 右の図のように、火のついたろうそくを入れると",
+  parentFigureBox: [168, 155, 322, 965],
+  crop_box: tallRightMix,
+});
+assert.ok(resolvedColumn[0] <= 360, "狭い Gemini 箱でも手・矢印まで含める");
+assert.ok(resolvedColumn[0] >= 318, "親図の底は残さない");
+assert.ok(resolvedColumn[1] >= 650, "本文列の切れ端を残さない");
+assert.ok(resolvedColumn[1] <= 690, "切れ端は1回だけ落とし、図の左端は残す");
+assert.ok(resolvedColumn[2] >= 490, "びん底まで含める");
+assert.ok(resolvedColumn[3] >= 850, "図の右端は残し、ページ余白までは広げない");
+const insetBelowTallParent = resolveInsetFigureBox({
+  questionText: "(1) 右の図のように、火のついたろうそくを入れると",
+  parentFigureBox: [148, 48, 500, 960],
+});
+assert.ok(insetBelowTallParent[0] <= 380, "親箱が小問まで伸びても差し込みを下に押し付けない");
+assert.ok(insetBelowTallParent[0] >= 300);
+assert.ok(insetBelowTallParent[2] - insetBelowTallParent[0] >= 150, "差し込みのびん・手が入る高さ");
+assert.ok(insetBelowTallParent[1] >= 600);
+const q1Inset = enrichPrintFigureBoxes([
+  {
+    id: "air-q1",
+    originalPath: "scans/air.jpg",
+    parentContext: "下の図のように、集気びんの中でろうそくを燃やすと、21秒後に火が消えました。",
+    questionText: "(1) 右の図のように、火のついたろうそくを入れると",
+    parentFigureBox: tallRightMix,
+    crop_box: tallRightMix,
+    visualType: "has_figure",
+  },
+]);
+assert.ok(q1Inset[0].parentFigureBox[3] - q1Inset[0].parentFigureBox[1] >= 500, "親図は横長のまま");
+assert.ok(looksLikeInsetFigureBox(q1Inset[0].subFigureBox), "差し込み図は右の狭い箱");
+assert.ok(q1Inset[0].subFigureBox[0] >= 280, "差し込みは親図の下から");
+const midStemMerged = mergeInsetFigureBox([340, 400, 520, 720], [336, 630, 576, 990], "right");
+assert.deepEqual(midStemMerged, [336, 630, 576, 990], "右の図の設問文箱は推定カラムを優先");
+const insetOcc = occupancyFromBox([332, 683, 508, 930], { asInset: true });
+assert.deepEqual(insetOcc, occupancyFromBox([200, 800, 280, 900], { asInset: true }), "差し込みは枠サイズで置く");
+assert.ok(insetOcc.widthPct <= 36);
+assert.ok(insetOcc.widthPct >= 18);
+assert.ok(insetOcc.heightMm <= 54);
+assert.equal(figurePlacementOf({ questionText: "(1) 右の図のように入れると" }), "right");
+const q1InsetHtml = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月31日",
+  problems: [
+    {
+      id: "air-q1-print",
+      label: "(1)",
+      questionText: "(1) 右の図のように、火のついたろうそくを入れると",
+      parentContext: "下の図のように、集気びんの中でろうそくを燃やすと、21秒後に火が消えました。",
+      optionsText: "① すぐに消える。",
+      visualType: "has_figure",
+      parentFigureBox: [168, 48, 330, 960],
+      subFigureBox: [332, 683, 508, 930],
+      parentFigureSrc: FIGURE_PNG,
+      subFigureSrc: FIGURE_PNG,
+      isCorrect: false,
+    },
+  ],
+});
+assert.match(q1InsetHtml, /item-part-with-inset/);
+assert.match(q1InsetHtml, /item-part-inset-right/);
+assert.match(q1InsetHtml, /inset-figure/);
+assert.match(q1InsetHtml, /inset-figure img \{\s*width: 100%;\s*height: 100%;\s*max-height: 48mm/);
+assert.match(q1InsetHtml, /object-fit: contain/);
+assert.equal((q1InsetHtml.match(/<img /g) ?? []).length, 2);
+assert.deepEqual(
+  trimParentBoxExcludingLead([138, 155, 322, 965], {
+    questionText: "(1)の結果から、どのようなことがわかりますか。",
+  }),
+  [148, 155, 322, 965],
+);
 const inferredSub = resolveSubFigureBox({
   questionText: "(3) 実験の結果を表にまとめると下のようになりました。",
   parentFigureBox: [40, 50, 380, 950],
@@ -1331,6 +1905,13 @@ const enrichedHelpful = enrichPrintFigureBoxes([
     originalPath: "scans/y.jpg",
     questionText: "(1) 変えるものを選びなさい。",
     parentFigureBox: [40, 50, 380, 950],
+    visualType: "has_figure",
+  },
+  {
+    id: "table-owner",
+    originalPath: "scans/y.jpg",
+    questionText: "(2) 実験の結果を表にまとめると下のようになりました。",
+    parentFigureBox: [40, 50, 380, 950],
     subFigureBox: [760, 40, 960, 960],
     visualType: "has_figure",
   },
@@ -1341,9 +1922,9 @@ const enrichedHelpful = enrichPrintFigureBoxes([
     visualType: "text_only",
   },
 ]);
-assert.deepEqual(enrichedHelpful[1].parentFigureBox, [40, 50, 380, 950]);
-assert.deepEqual(enrichedHelpful[1].subFigureBox, [760, 40, 960, 960]);
-assert.equal(enrichedHelpful[1].visualType, "has_figure");
+assert.deepEqual(enrichedHelpful[2].parentFigureBox, [40, 50, 380, 950]);
+assert.deepEqual(enrichedHelpful[2].subFigureBox, [760, 40, 960, 960]);
+assert.equal(enrichedHelpful[2].visualType, "has_figure");
 const fromCropOnly = enrichPrintFigureBoxes([
   {
     id: "crop-only",
@@ -1379,6 +1960,130 @@ const noSharedSolo = enrichPrintFigureBoxes([
 ]);
 assert.deepEqual(noSharedSolo[0].parentFigureBox, [40, 50, 380, 950]);
 assert.deepEqual(noSharedSolo[1].parentFigureBox, [80, 40, 420, 960]);
+const candleNeedsFigure = enrichPrintFigureBoxes([
+  {
+    id: "candle-q4",
+    originalPath: "scans/candle-page.jpg",
+    visualType: "text_only",
+    questionText: "(4) ウの上のすき間に線香のけむりを近づけると、どのように動きますか。",
+  },
+]);
+const q1p2WrongSub = enrichPrintFigureBoxes([
+  {
+    id: "q1-2",
+    originalPath: "scans/page.jpg",
+    parentContext: "下の図のように、集気びんの中でろうそくを燃やすと、21秒後に火が消えました。",
+    questionText: "(2) の結果から、どのようなことがわかりますか。次の①〜③から選び、番号を書きましょう。",
+    parentFigureBox: [40, 50, 380, 950],
+    subFigureBox: [520, 40, 820, 960],
+    visualType: "has_figure",
+  },
+  {
+    id: "q2-1",
+    originalPath: "scans/page.jpg",
+    parentContext: "気体検知管の使い方を調べました。",
+    questionText: "(1)の器具を使うと、何を調べることができますか。",
+    parentFigureBox: [520, 40, 820, 960],
+    visualType: "has_figure",
+  },
+]);
+assert.deepEqual(q1p2WrongSub[0].parentFigureBox, [176, 50, 380, 950]);
+assert.equal(q1p2WrongSub[0].subFigureBox, null);
+assert.deepEqual(q1p2WrongSub[1].parentFigureBox, [520, 40, 820, 960]);
+assert.equal(
+  resolveSubFigureBox({
+    parentContext: "下の図のように、集気びんの中でろうそくを燃やすと、21秒後に火が消えました。",
+    questionText: "(2) の結果から、どのようなことがわかりますか。",
+    parentFigureBox: [40, 50, 380, 950],
+    subFigureBox: [520, 40, 820, 960],
+  }),
+  null,
+);
+const q1p2Html = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月31日",
+  problems: [
+    {
+      id: "q1-2-print",
+      label: "2",
+      topicTag: "ろうそく",
+      visualType: "has_figure",
+      parentContext: "下の図のように、集気びんの中でろうそくを燃やすと、21秒後に火が消えました。",
+      questionText: "(2) の結果から、どのようなことがわかりますか。次の①〜③から選び、番号を書きましょう。",
+      optionsText: "① 空気がなくなる ② 空気の成分が変わる ③ 空気の成分は変わらない",
+      parentFigureSrc: FIGURE_PNG,
+      subFigureSrc: FIGURE_PNG,
+      parentFigureBox: [40, 50, 380, 950],
+      subFigureBox: [520, 40, 820, 960],
+      isCorrect: false,
+      correctAnswer: "2",
+      parentCoachingTip: "",
+    },
+  ],
+});
+assert.equal((q1p2Html.match(/<img /g) ?? []).length, 1);
+assert.match(q1p2Html, /の結果から/);
+assert.equal(candleNeedsFigure[0].visualType, "has_figure");
+assert.deepEqual(candleNeedsFigure[0].parentFigureBox, [88, 48, 430, 960]);
+const dirtyVsTight = enrichPrintFigureBoxes([
+  {
+    id: "air-wide",
+    originalPath: "scans/air.jpg",
+    parentContext: "下の図のように、集気びんの中でろうそくを燃やすと、21秒後に火が消えました。",
+    questionText: "(1) 右の図のように、火のついたろうそくを入れると",
+    crop_box: [36, 40, 520, 960],
+    visualType: "has_figure",
+  },
+  {
+    id: "air-tight",
+    originalPath: "scans/air.jpg",
+    parentContext: "下の図のように、集気びんの中でろうそくを燃やすと、21秒後に火が消えました。",
+    questionText: "(2) (1)の結果から、どのようなことがわかりますか。",
+    parentFigureBox: [120, 50, 380, 950],
+    visualType: "has_figure",
+  },
+]);
+assert.deepEqual(dirtyVsTight[0].parentFigureBox, [148, 50, 338, 950]);
+assert.deepEqual(dirtyVsTight[1].parentFigureBox, [148, 50, 380, 950]);
+const notBorrowed = enrichPrintFigureBoxes([
+  {
+    id: "lever-same",
+    originalPath: "scans/same.jpg",
+    questionText: "(1) てこのおもりの位置を変えなさい。",
+    parentFigureBox: [40, 50, 380, 950],
+    visualType: "has_figure",
+  },
+  {
+    id: "candle-same",
+    originalPath: "scans/same.jpg",
+    visualType: "text_only",
+    questionText: "(4) ウの上のすき間に線香のけむりを近づけると",
+  },
+]);
+assert.notDeepEqual(notBorrowed[1].parentFigureBox, [40, 50, 380, 950]);
+assert.ok(notBorrowed[1].parentFigureBox);
+const candleQ4Html = buildPrintHtml({
+  title: "お直し",
+  childName: "はると",
+  dateLabel: "2026年8月31日",
+  problems: [
+    {
+      id: "print-q4",
+      label: "4",
+      topicTag: "ろうそく",
+      visualType: "text_only",
+      questionText: "(4) ウの上のすき間に線香のけむりを近づけると、どのように動きますか。",
+      optionsText: "① 上のすき間からびんの中に吸いこまれる ② 下のすき間から吸いこまれる ③ 吸いこまれない",
+      parentFigureSrc: FIGURE_PNG,
+      isCorrect: false,
+      correctAnswer: "1",
+      parentCoachingTip: "",
+    },
+  ],
+});
+assert.match(candleQ4Html, /<img /);
+assert.match(candleQ4Html, /ウの上のすき間/);
 const mixedCards = flattenWorksheetItems([
   {
     id: "lever-card",
@@ -1484,15 +2189,29 @@ const printHook = readFileSync(join(root, "src/features/print/usePrintDocument.t
 assert.match(printHook, /excluded\.has/);
 assert.match(printHook, /candidates/);
 assert.match(printHook, /resolvePrintImageUrls/);
+assert.match(printHook, /imagesReady/);
+assert.match(readFileSync(join(root, "src/features/print/service.ts"), "utf8"), /stripStoredFigureSrcs/);
+assert.match(readFileSync(join(root, "src/features/print/service.ts"), "utf8"), /pickFullPageSource/);
+assert.match(readFileSync(join(root, "src/features/print/service.ts"), "utf8"), /isFullPageScanSource/);
+assert.match(readFileSync(join(root, "src/features/print/lib/from-reviews.mjs"), "utf8"), /採点時の切り抜き JPEG は印字に使わない/);
 const scanImageSrc = readFileSync(join(root, "src/lib/files/scan-image.ts"), "utf8");
-assert.match(scanImageSrc, /FIGURE_CACHE_VERSION = 24/);
+assert.match(scanImageSrc, /FIGURE_CACHE_VERSION = 59/);
+assert.match(readFileSync(join(root, "src/features/print/lib/document.mjs"), "utf8"), /acceptFreshPrintFigure/);
+assert.match(readFileSync(join(root, "src/features/print/lib/document.mjs"), "utf8"), /hasRecropSource/);
+assert.match(readFileSync(join(root, "src/features/print/service.ts"), "utf8"), /printFigureRev/);
+assert.match(readFileSync(join(root, "src/features/print/service.ts"), "utf8"), /localUri/);
+assert.match(readFileSync(join(root, "src/features/print/lib/from-reviews.mjs"), "utf8"), /preferPageSource/);
 assert.match(scanImageSrc, /isRawScanSourceUri/);
+assert.match(scanImageSrc, /isFullPageScanSource/);
+assert.match(scanImageSrc, /source is not a full page scan/);
 assert.match(scanImageSrc, /expandFigureGeminiBox/);
 assert.match(scanImageSrc, /planExpandedFigureCrop/);
 assert.match(scanImageSrc, /cropFigureToBase64/);
 assert.match(scanImageSrc, /expanded-preserve|expanded-table/);
 assert.match(scanImageSrc, /preserveExtent:\s*true/);
 assert.match(scanImageSrc, /asTable/);
+assert.match(readFileSync(join(root, "src/features/print/lib/bbox.mjs"), "utf8"), /trimInsetNeighborEdges/);
+assert.match(readFileSync(join(root, "src/features/print/lib/bbox.mjs"), "utf8"), /trimInsetSliverEdges/);
 assert.match(readFileSync(join(root, "src/features/print/lib/bbox.mjs"), "utf8"), /clipFigureBottomBeforeBelow/);
 assert.match(readFileSync(join(root, "src/features/print/lib/bbox.mjs"), "utf8"), /FIGURE_BOTTOM_PAD = 0\.08/);
 assert.match(readFileSync(join(root, "src/features/print/lib/bbox.mjs"), "utf8"), /FIGURE_CAPTION_ROOM/);
@@ -1523,7 +2242,8 @@ assert.match(printService, /enrichPrintFigureBoxes/);
 assert.match(printService, /resolveParentFigureBox/);
 assert.match(printService, /resolveSubFigureBox/);
 assert.match(printService, /needsDataTableVisual/);
-assert.match(printService, /resolvePrintImageUrls\(input.problems\)/);
+assert.doesNotMatch(printService, /needsRecrop/);
+assert.match(printService, /resolvePrintImageUrls\(input.problems.map\(stripStoredFigureSrcs\)\)/);
 assert.match(printService, /fallback to text: no crop_box/);
 assert.doesNotMatch(printService, /coerceGeminiBox\(problem.bbox\)/);
 const gradeServiceSrc = readFileSync(join(root, "src/features/grading/service.ts"), "utf8");
@@ -1692,5 +2412,71 @@ const afterClear = applyLeechToCarte(
 );
 assert.equal(afterClear.weak_units[0].correct, 3);
 pass("要指導リストの手動復帰・完全クリア");
+
+const { applyReviewResult: applyRecord, archiveStaleRecords, selectRecommendedReviews, toQuestionRecord, masteryStars, RECOMMENDED_PRINT_MAX: recMax } = await import(
+  pathToFileURL(join(root, "src/features/review/lib/question-record.mjs")).href,
+);
+assert.equal(RECOMMENDED_PRINT_MAX, 6);
+assert.equal(recMax, 6);
+const staged = applyRecord(
+  { id: "s0", status: "active", reviewStage: 0, mistakeCount: 2, consecutiveMisses: 0, consecutiveHits: 0, intervalDays: 1, easeFactor: 2.5, nextReviewOn: today },
+  true,
+  { now: new Date(`${today}T00:00:00`) },
+);
+assert.equal(staged.review_stage, 1);
+assert.equal(staged.next_review_at, addDaysIso(today, 3));
+const staged2 = applyRecord(staged, true, { now: new Date(`${today}T00:00:00`) });
+assert.equal(staged2.review_stage, 2);
+assert.equal(staged2.next_review_at, addDaysIso(today, 7));
+const mastered = applyRecord(staged2, true, { now: new Date(`${today}T00:00:00`) });
+assert.equal(mastered.review_stage, 3);
+assert.equal(mastered.status, "mastered");
+assert.equal(mastered.next_review_at, null);
+const reset = applyRecord(staged2, false, { now: new Date(`${today}T00:00:00`) });
+assert.equal(reset.review_stage, 0);
+assert.equal(reset.mistake_count, 3);
+assert.equal(reset.next_review_at, addDaysIso(today, 1));
+assert.equal(masteryStars(2), "★★☆");
+const stale = archiveStaleRecords(
+  [{ id: "old", status: "active", nextReviewOn: addDaysIso(today, -31), is_archived: false }],
+  { today },
+);
+assert.equal(stale[0].is_archived, true);
+const rec = selectRecommendedReviews(
+  [
+    { id: "a", status: "active", mistake_count: 1, nextReviewOn: addDaysIso(today, -1), questionText: "1+1" },
+    { id: "b", status: "active", mistake_count: 5, nextReviewOn: addDaysIso(today, -2), questionText: "2+2" },
+    { id: "c", status: "active", mistake_count: 5, nextReviewOn: addDaysIso(today, -10), questionText: "3+3" },
+    { id: "d", status: "active", mistake_count: 9, nextReviewOn: addDaysIso(today, 7), questionText: "future" },
+    { id: "e", status: "retired", is_archived: true, mistake_count: 20, nextReviewOn: addDaysIso(today, -40), questionText: "sleep" },
+  ],
+  { today, max: 6 },
+);
+assert.equal(rec.selected[0].id, "c");
+assert.equal(rec.selected.map((item) => item.id).includes("d"), false);
+assert.equal(rec.selected.map((item) => item.id).includes("e"), false);
+const todayPick = collectPrintProblems({
+  childId: "child-1",
+  scans: [dailyScan],
+  reviews: [{ id: "rq-old", status: "active", questionText: "古い復習", is_correct: false, label: "問9" }],
+  scope: "today",
+});
+assert.equal(todayPick.length, 8);
+assert.equal(todayPick.every((item) => item.printSource === "scan"), true);
+const recPick = collectPrintProblems({
+  reviews: Array.from({ length: 12 }, (_, index) => ({
+    id: `rq-${index}`,
+    status: "active",
+    questionText: `復習${index} 2+${index}=`,
+    is_correct: false,
+    label: `問${index}`,
+    mistake_count: index,
+    nextReviewOn: addDaysIso(today, -index),
+  })),
+  scope: "recommended",
+});
+assert.ok(recPick.length <= 6);
+assert.equal(toQuestionRecord({ id: "q", questionText: "2+2", topicTag: "たし算", review_stage: 1, mistake_count: 4 }).unit_name, "たし算");
+pass("今日のやり直しとAIおすすめ復習を2系統に分け、期日超過はおやすみBOXへ退避する");
 
 console.log("\nAll print/review checks passed.");

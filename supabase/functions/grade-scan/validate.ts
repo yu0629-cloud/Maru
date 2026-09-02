@@ -17,12 +17,16 @@ import {
 import {
   answersMatchStrict,
   applyCopiedAnswerGuards,
+  canonicalizeChoiceAnswer,
   gradeFromGeminiPayload,
   isQuestionNumberOnly,
+  normalizeAnswerType,
+  snapBBoxToAnswerSlot,
 } from "./hybrid-grade.ts";
 import { parseJsonPayload } from "./parse-json.mjs";
 import { resolveScanSubject } from "./subject.ts";
 import { inferVisualType, isVisualType, type VisualType } from "./visual.ts";
+import { readChildDetectionHint } from "./match-child.mjs";
 
 export class GradeValidationError extends Error {
   constructor(message: string) {
@@ -198,13 +202,18 @@ export function normalizeProblem(raw: unknown, index: number): GradeProblem {
     throw new GradeValidationError(`${path}.bbox の範囲が不正です`);
   }
 
-  const studentAnswer = asString(obj.student_answer, `${path}.student_answer`);
+  const unit = readQuestionUnit(obj);
+  const optionsTextEarly = unit.options || optionalString(obj.word_bank) || "";
+  const rawStudent = obj.student_answer === null ? "" : asString(obj.student_answer, `${path}.student_answer`);
+  const flaggedBlank = obj.is_blank === true || !rawStudent.trim();
+  const answerType = flaggedBlank ? "none" : normalizeAnswerType(obj.answer_type, rawStudent);
+  const studentAnswer = flaggedBlank ? "" : canonicalizeChoiceAnswer(rawStudent, optionsTextEarly, answerType);
   const topicTag = optionalString(obj.topic_tag) ?? optionalString(obj.topic) ?? "未分類";
   const problemIndex = asString(obj.problem_index, `${path}.problem_index`) || `問${index + 1}`;
-  const groundTruth = optionalString(obj.ground_truth);
+  const groundTruth = canonicalizeChoiceAnswer(optionalString(obj.ground_truth) || "", optionsTextEarly, answerType);
   const correctAnswer =
-    groundTruth || asString(obj.correct_answer, `${path}.correct_answer`);
-  const unit = readQuestionUnit(obj);
+    groundTruth ||
+    canonicalizeChoiceAnswer(asString(obj.correct_answer, `${path}.correct_answer`), optionsTextEarly, answerType);
   const questionTextRaw =
     unit.questionFromUnit ??
     optionalString(obj.question_text) ??
@@ -212,6 +221,8 @@ export function normalizeProblem(raw: unknown, index: number): GradeProblem {
     optionalString(obj.prompt) ??
     "";
   const questionText = isQuestionNumberOnly(questionTextRaw) ? "" : normalizeOcrText(questionTextRaw);
+  const parentFigureBox = parseUsableBox(unit.parentFigure);
+  const subFigureBox = parseUsableBox(unit.subFigure);
 
   let isCorrect = asBoolean(obj.is_correct, `${path}.is_correct`);
   if (groundTruth && !answersMatchStrict(studentAnswer, groundTruth)) {
@@ -225,10 +236,17 @@ export function normalizeProblem(raw: unknown, index: number): GradeProblem {
       ground_truth: groundTruth || correctAnswer,
       correct_answer: correctAnswer,
       passage_text: unit.context || optionalString(obj.passage_text) || "",
-      word_bank: unit.options || optionalString(obj.word_bank) || "",
+      word_bank: optionsTextEarly,
+      options_text: optionsTextEarly,
+      context_text: unit.context,
+      bbox,
+      parent_figure_box: parentFigureBox,
+      sub_figure_box: subFigureBox,
+      answer_type: answerType,
     },
     isCorrect,
   );
+  const snappedBbox = snapBBoxToAnswerSlot(bbox, parentFigureBox, subFigureBox, answerType) ?? bbox;
 
   const inferredType = isProblemType(obj.problem_type)
     ? obj.problem_type
@@ -285,8 +303,6 @@ export function normalizeProblem(raw: unknown, index: number): GradeProblem {
       });
 
   let cropBox: GradeProblem["crop_box"] = parseUsableBox(unit.crop);
-  const parentFigureBox = parseUsableBox(unit.parentFigure);
-  const subFigureBox = parseUsableBox(unit.subFigure);
   if (!cropBox) cropBox = parentFigureBox ?? subFigureBox;
   if ((parentFigureBox || subFigureBox) && visualType === "text_only") {
     visualType = "has_figure";
@@ -300,9 +316,11 @@ export function normalizeProblem(raw: unknown, index: number): GradeProblem {
   return {
     problem_index: problemIndex,
     question_text: questionText,
-    bbox,
+    bbox: snappedBbox,
     is_correct: isCorrect,
     student_answer: studentAnswer,
+    answer_type: answerType,
+    is_blank: flaggedBlank || !studentAnswer,
     correct_answer: correctAnswer,
     topic_tag: topicTag,
     difficulty_level: difficulty,
@@ -353,18 +371,20 @@ export function validateGradeResult(raw: unknown): GradeResult {
     subject: resolveScanSubject({ subject: obj.subject, problems }),
     overall_score: { earned, max },
     problems,
+    child_detection: readChildDetectionHint(obj),
   };
 }
 
 /** Gemini 抽出 JSON はプログラム採点。旧判定 JSON はそのまま検証する */
 export function gradeGeminiResponse(raw: unknown): GradeResult {
+  const detection = readChildDetectionHint(raw);
   try {
     const hybrid = gradeFromGeminiPayload(raw);
-    if (hybrid) return hybrid;
+    if (hybrid) return { ...hybrid, child_detection: detection };
   } catch (error) {
     throw new GradeValidationError(error instanceof Error ? error.message : "EXTRACT_INVALID");
   }
-  return validateGradeResult(raw);
+  return { ...validateGradeResult(raw), child_detection: detection };
 }
 
 export function countCorrect(result: GradeResult) {

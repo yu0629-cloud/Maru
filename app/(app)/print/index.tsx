@@ -36,6 +36,10 @@ function PrintBody() {
       Alert.alert(t("print.emptyAlertTitle"), t("print.emptyAlertBody"));
       return;
     }
+    if (!input.imagesReady) {
+      Alert.alert(t("print.emptyAlertTitle"), t("print.creatingPdf"));
+      return;
+    }
     setBusy(true);
     setBusyLabel(action === "share" ? t("print.creatingPdf") : t("print.openingPrint"));
     setMessage(null);
@@ -87,10 +91,18 @@ function PrintBody() {
       >
         <Text className="text-center font-semibold text-white">{t("print.openPreview")}</Text>
       </Pressable>
-      <Pressable disabled={busy} className="mt-3 rounded-xl bg-ink px-4 py-3" onPress={() => void run("share")}>
+      <Pressable
+        disabled={busy || (input.problems.length > 0 && !input.imagesReady)}
+        className="mt-3 rounded-xl bg-ink px-4 py-3"
+        onPress={() => void run("share")}
+      >
         <Text className="text-center font-semibold text-white">{t("print.sharePdf")}</Text>
       </Pressable>
-      <Pressable disabled={busy} className="mt-3 rounded-xl bg-white px-4 py-3" onPress={() => void run("print")}>
+      <Pressable
+        disabled={busy || (input.problems.length > 0 && !input.imagesReady)}
+        className="mt-3 rounded-xl bg-white px-4 py-3"
+        onPress={() => void run("print")}
+      >
         <Text className="text-center font-semibold text-ink">{t("print.sendPrinter")}</Text>
       </Pressable>
 

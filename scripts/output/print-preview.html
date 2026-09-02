@@ -2,7 +2,8 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
-  <title>8月26日のまとめプリント</title>
+  <title>8月26日のまとめプリント · r59</title>
+  <!-- maru-print-crop-rev:59 -->
   <style>
 @page { size: A4; margin: 12mm; }
 * { box-sizing: border-box; }
@@ -12,6 +13,15 @@ html, body {
   background: #fff;
   color: #222;
   font-family: "Hiragino Sans", "Yu Gothic", "Noto Sans JP", sans-serif;
+}
+.print-crop-rev {
+  position: absolute;
+  left: 0;
+  top: 0;
+  font-size: 1px;
+  line-height: 1px;
+  color: #fff;
+  opacity: 0.02;
 }
 .sheet {
   width: 100%;
@@ -138,6 +148,17 @@ img {
   padding-top: 8px;
   border-top: 1px solid #eee;
 }
+.answer-box-filled {
+  width: auto;
+  min-width: 60px;
+  padding: 4px 10px;
+  font-size: 16px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f3f3f3;
+}
 .answer-box {
   flex: 0 0 auto;
   width: 60px;
@@ -169,14 +190,46 @@ img {
   page-break-inside: avoid;
   break-inside: avoid;
 }
+.figure-media.parent-figure {
+  padding-top: 1.5mm;
+}
 .figure-media.parent-figure img {
   max-height: 68mm;
 }
 .figure-media.sub-figure {
-  width: 100%;
+  width: min(var(--crop-w, 100%), 100%);
 }
 .figure-media.sub-figure img {
-  max-height: none;
+  max-height: 92mm;
+}
+.item-part-with-inset {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 8px;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+.item-part-inset-left {
+  flex-direction: row-reverse;
+}
+.item-part-copy {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.figure-media.inset-figure {
+  flex: 0 0 auto;
+  width: 32%;
+  max-width: 36%;
+  height: 48mm;
+  margin: 0;
+}
+.figure-media.inset-figure img {
+  width: 100%;
+  height: 100%;
+  max-height: 48mm;
+  object-fit: contain;
+  object-position: center center;
 }
 /* 大問カード全体は小問のあいだで折り返してよい。図・表・小問は分割しない */
 .item-figure {
@@ -215,7 +268,8 @@ img {
 }
 </style>
 </head>
-<body>
+<body data-maru-print-crop-rev="59">
+<span class="print-crop-rev">maru-print-crop-rev:59</span>
 
     <section class="sheet single">
       <header style="border-bottom: 2px solid #c44738; padding-bottom: 6px; margin-bottom: 10px;">
@@ -223,7 +277,7 @@ img {
         <h1 style="font-size: 16px; margin: 2px 0 6px; font-weight: 700;">8月26日のまとめプリント</h1>
         <div style="display: flex; justify-content: space-between; font-size: 12px; color: #222;">
           <span>なまえ: はると</span>
-          <span>2026年8月26日</span>
+          <span>2026年8月26日 r59</span>
         </div>
       </header>
       <div class="print-body"><div class="item-row"><div class="item item-compact">

@@ -32,6 +32,8 @@ export type GradedProblemView = {
   sub_figure_box?: GeminiBBox | null;
   figureImageSrc?: string;
   figureBase64?: string;
+  parentFigureSrc?: string;
+  subFigureSrc?: string;
   subFigureBase64?: string;
   bbox?: GeminiBBox;
   dirty?: boolean;

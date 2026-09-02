@@ -1,4 +1,5 @@
 import { usableGeminiBox } from "./bbox.mjs";
+import { benefitsFromParentFigure } from "./figure-boxes.mjs";
 
 export { coerceGeminiBox, usableGeminiBox } from "./bbox.mjs";
 
@@ -18,13 +19,20 @@ function hasFigureBox(input = {}) {
 export function inferVisualType(input = {}) {
   const explicit = input.visualType ?? input.visual_type;
   if (hasFigureBox(input) && explicit !== "passage_based") return "has_figure";
-  if (isVisualType(explicit)) return explicit;
+  if (explicit === "passage_based") return "passage_based";
+  if (explicit === "has_figure") return "has_figure";
   const type = String(input.problemType ?? input.problem_type ?? "");
   if (type === "reading_passage" || type === "integrated_essay") return "passage_based";
   if (type === "math_geometry_graph" || type === "science_social_diagram") return "has_figure";
   const hay = `${input.topicTag ?? input.topic_tag ?? input.topic ?? input.unit ?? ""} ${input.questionText ?? input.question_text ?? input.prompt ?? ""} ${input.parentContext ?? input.parent_context ?? input.contextText ?? input.context_text ?? ""} ${input.optionsText ?? input.options_text ?? ""}`;
   if (/長文|読解|本文|passage|dialogue|対話文|会話文|下線部/.test(hay)) return "passage_based";
-  if (/作図|グラフ|展開図|立体|時計|イラスト|地図|回路|切断|コンパス|図形|資料|次の表|下の表|表にまと|和にまと|下の図|次の図|右の図/.test(hay)) return "has_figure";
+  if (
+    /作図|グラフ|展開図|立体|時計|イラスト|地図|回路|切断|コンパス|図形|資料|次の表|下の表|表にまと|和にまと|下の図|次の図|右の図/.test(hay) ||
+    benefitsFromParentFigure(input)
+  ) {
+    return "has_figure";
+  }
+  if (isVisualType(explicit)) return explicit;
   return "text_only";
 }
 

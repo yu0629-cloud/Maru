@@ -3,9 +3,18 @@ import type { GradedProblemView } from "@/src/features/grading/corrections";
 import type { OverallScore } from "@/src/types/grading";
 import type { SubjectCode } from "@/src/types/database";
 
+export type ScanChildDetection = {
+  detected_child_id: string;
+  detected_child_name: string;
+  confidence_reason: string;
+  matched: boolean;
+  fallback: boolean;
+};
+
 export type ScanRecord = {
   id: string;
   childId: string;
+  childDetection?: ScanChildDetection;
   status: "grading" | "completed" | "failed" | "inpainting";
   localUri?: string;
   originalStoragePath?: string | null;
@@ -67,9 +76,16 @@ export const useScanStore = create<ScanState>((set) => ({
     set((state) => {
       const current = state.scans[id];
       if (!current) return state;
+      const childDetection = current.childDetection
+        ? {
+            ...current.childDetection,
+            fallback: childId !== current.childDetection.detected_child_id,
+            matched: childId === current.childDetection.detected_child_id,
+          }
+        : current.childDetection;
       return {
         revision: state.revision + 1,
-        scans: { ...state.scans, [id]: { ...current, childId } },
+        scans: { ...state.scans, [id]: { ...current, childId, childDetection } },
       };
     }),
   remove: (id) =>

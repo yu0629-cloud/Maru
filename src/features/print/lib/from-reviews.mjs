@@ -2,6 +2,8 @@
 
 import { figureCropBoxOf, figureDataSrcOf, figureImageSrcOf, inferVisualType, passageTextOf, contextTextOf, optionsTextOf } from "./visual.mjs";
 import { normalizeOcrText } from "./ocr-text.mjs";
+import { matchLeadingQuestionNumber, referencedPartTokens, resolveQuestionNumber } from "./question-number.mjs";
+import { figureFamilyOf, sameFigureFamily } from "./figure-boxes.mjs";
 
 export function isBlankPrintAnswer(item) {
   const status = String(item?.status ?? item?.answer_status ?? item?.answerStatus ?? "").toLowerCase();
@@ -62,10 +64,19 @@ export function questionTextOf(item) {
   return "";
 }
 
+function preferPageSource(item) {
+  const local = String(item?.localUri || item?.local_uri || "").trim();
+  const original = String(item?.originalImageSrc || item?.original_image_src || "").trim();
+  const isPage = (uri) => Boolean(uri) && !uri.startsWith("data:image/") && !uri.startsWith("mock");
+  if (isPage(local)) return local;
+  if (isPage(original)) return original;
+  return local || original || "";
+}
+
 export function printProblemFromReview(item) {
   const label = String(item?.label || item?.problemIndex || item?.problem_label || "問").trim() || "問";
   const expired = Boolean(item?.mediaExpired);
-  const originalLocal = String(item?.localUri || "").trim();
+  const originalLocal = String(item?.localUri || item?.local_uri || "").trim();
   return {
     id: String(item?.problemId || item?.id || label),
     label,
@@ -83,12 +94,13 @@ export function printProblemFromReview(item) {
     figureCropBox: figureCropBoxOf(item),
     parentFigureBox: item?.parentFigureBox ?? item?.parent_figure_box ?? null,
     subFigureBox: item?.subFigureBox ?? item?.sub_figure_box ?? null,
-    figureImageSrc: expired ? "" : figureImageSrcOf(item),
-    figureBase64: expired ? "" : String(item?.figureBase64 ?? item?.figure_base64 ?? "").trim(),
-    parentFigureSrc: expired ? "" : String(item?.parentFigureSrc ?? item?.parent_figure_src ?? "").trim(),
-    parentFigureBase64: expired ? "" : String(item?.parentFigureBase64 ?? item?.parent_figure_base64 ?? "").trim(),
-    subFigureSrc: expired ? "" : String(item?.subFigureSrc ?? item?.sub_figure_src ?? "").trim(),
-    subFigureBase64: expired ? "" : String(item?.subFigureBase64 ?? item?.sub_figure_base64 ?? "").trim(),
+    // 採点時の切り抜き JPEG は印字に使わない。生スキャンから切り直す
+    figureImageSrc: "",
+    figureBase64: "",
+    parentFigureSrc: "",
+    parentFigureBase64: "",
+    subFigureSrc: "",
+    subFigureBase64: "",
     passageText: normalizeOcrText(passageTextOf(item)),
     contextText: normalizeOcrText(String(item?.contextText ?? item?.context_text ?? item?.parent_context ?? passageTextOf(item) ?? "").trim()),
     parentContext: normalizeOcrText(String(item?.parentContext ?? item?.parent_context ?? item?.contextText ?? item?.context_text ?? "").trim()),
@@ -96,61 +108,116 @@ export function printProblemFromReview(item) {
     blankedPath: expired ? "" : item?.blankedPath || "",
     croppedPath: expired ? "" : item?.croppedPath || "",
     originalPath: expired ? "" : item?.originalPath || "",
+    localUri: expired ? "" : originalLocal,
     imageSrc: expired ? "" : item?.blankedImageSrc || item?.croppedImageSrc || item?.imageSrc || "",
     blankedImageSrc: expired ? "" : item?.blankedImageSrc || "",
     croppedImageSrc: expired ? "" : item?.croppedImageSrc || "",
-    originalImageSrc: expired ? "" : item?.originalImageSrc || originalLocal || "",
-    isCorrect: false,
+    originalImageSrc: expired ? "" : preferPageSource(item),
+    isCorrect:
+      item?.printRole === "prerequisite" || item?.isCorrect === true || item?.is_correct === true,
+    printRole: item?.printRole || "review",
     isBlanked: Boolean(item?.isBlanked || item?.blankedImageSrc || item?.blankedPath || isBlankPrintAnswer(item)),
     mediaExpired: expired,
+    printSource: item?.printSource || "review",
+    createdAt: item?.createdAt || item?.created_at || null,
+    reviewStage: item?.reviewStage ?? item?.review_stage ?? 0,
+    mistakeCount: item?.mistakeCount ?? item?.mistake_count ?? item?.consecutiveMisses ?? 0,
+    nextReviewAt: item?.nextReviewAt ?? item?.next_review_at ?? item?.nextReviewOn ?? null,
+    isArchived: item?.isArchived === true || item?.is_archived === true || item?.status === "retired",
+    status: item?.status,
   };
+}
+
+function scanProblemToReview(problem, scan, expired) {
+  const label = String(problem.problem_label || `問${problem.problem_index ?? ""}`.trim() || "問");
+  return printProblemFromReview({
+    id: problem.id,
+    problemId: problem.id,
+    label,
+    topicTag: problem.topic_tag,
+    subject: problem.subject,
+    problemType: problem.problem_type,
+    questionText: problem.question_text || problem.questionText || "",
+    prompt: problem.prompt,
+    problemIndex: label,
+    studentAnswer: problem.student_answer,
+    correctAnswer: problem.correct_answer,
+    parentCoachingTip: problem.parent_coaching_tip,
+    bbox: problem.bbox ?? problem.gemini_bbox ?? problem.geminiBbox,
+    cropBox: problem.bounding_box,
+    visualType: problem.visual_type || problem.visualType,
+    figureCropBox: problem.crop_box || problem.figureCropBox,
+    parentFigureBox: problem.parent_figure_box || problem.parentFigureBox,
+    subFigureBox: problem.sub_figure_box || problem.subFigureBox,
+    figureImageSrc: "",
+    figureBase64: "",
+    passageText: problem.passage_text || problem.passageText,
+    contextText: problem.context_text || problem.contextText || problem.parent_context,
+    parentContext: problem.parent_context || problem.parentContext || problem.context_text,
+    optionsText: problem.options_text || problem.optionsText,
+    imageSrc: problem.imageSrc,
+    localUri: scan.localUri,
+    originalPath: scan.originalStoragePath,
+    blankedPath: problem.blanked_storage_path,
+    croppedPath: problem.cropped_storage_path,
+    isCorrect: problem.is_correct ?? problem.isCorrect,
+    mistake_type: problem.mistake_type,
+    mediaExpired: expired,
+    printSource: "scan",
+    createdAt: scan.createdAt || scan.created_at || problem.created_at || null,
+  });
+}
+
+function partTokenOf(problem) {
+  const resolved = resolveQuestionNumber({
+    questionText: problem?.questionText ?? problem?.question_text,
+    label: problem?.label ?? problem?.problem_label ?? problem?.problemIndex ?? problem?.problem_index,
+    problemLabel: problem?.problem_label,
+    problemIndex: problem?.problemIndex ?? problem?.problem_index,
+  });
+  return String(resolved.token || questionNumberToken(problem) || "").trim();
+}
+
+function samePrintUnit(a, b) {
+  const ctxA = contextHaystack(a);
+  const ctxB = contextHaystack(b);
+  if (
+    ctxA &&
+    ctxB &&
+    (ctxA === ctxB ||
+      (ctxA.length >= 14 && ctxB.includes(ctxA)) ||
+      (ctxB.length >= 14 && ctxA.includes(ctxB)))
+  ) {
+    return true;
+  }
+  const scanA = scanToken(a);
+  const scanB = scanToken(b);
+  return Boolean(scanA && scanA === scanB && figureFamilyOf(a) && sameFigureFamily(a, b));
 }
 
 export function printProblemsFromScans(scans, childId) {
   const out = [];
   for (const scan of scans ?? []) {
-    if (childId && scan.childId && scan.childId !== childId) continue;
+    if (childId && scan.childId !== childId) continue;
     const expired = Boolean(scan.originalPurgedAt && !scan.localUri && !scan.originalStoragePath);
-    for (const problem of scan.problems ?? []) {
-      if (!isIncorrectForPrint(problem)) continue;
-      const label = String(problem.problem_label || `問${problem.problem_index ?? ""}`.trim() || "問");
-      out.push(
-        printProblemFromReview({
-          id: problem.id,
-          problemId: problem.id,
-          label,
-          topicTag: problem.topic_tag,
-          subject: problem.subject,
-          problemType: problem.problem_type,
-          questionText: problem.question_text || problem.questionText || "",
-          prompt: problem.prompt,
-          problemIndex: label,
-          studentAnswer: problem.student_answer,
-          correctAnswer: problem.correct_answer,
-          parentCoachingTip: problem.parent_coaching_tip,
-          bbox: problem.bbox ?? problem.gemini_bbox ?? problem.geminiBbox,
-          cropBox: problem.bounding_box,
-          visualType: problem.visual_type || problem.visualType,
-          figureCropBox: problem.crop_box || problem.figureCropBox,
-          parentFigureBox: problem.parent_figure_box || problem.parentFigureBox,
-          subFigureBox: problem.sub_figure_box || problem.subFigureBox,
-          figureImageSrc: problem.figureImageSrc,
-          figureBase64: problem.figureBase64,
-          passageText: problem.passage_text || problem.passageText,
-          contextText: problem.context_text || problem.contextText || problem.parent_context,
-          parentContext: problem.parent_context || problem.parentContext || problem.context_text,
-          optionsText: problem.options_text || problem.optionsText,
-          imageSrc: problem.imageSrc,
-          localUri: scan.localUri,
-          originalPath: scan.originalStoragePath,
-          blankedPath: problem.blanked_storage_path,
-          croppedPath: problem.cropped_storage_path,
-          isCorrect: false,
-          mistake_type: problem.mistake_type,
-          mediaExpired: expired,
-        }),
-      );
+    const rows = scan.problems ?? [];
+    const printed = rows.map((problem) => scanProblemToReview(problem, scan, expired));
+    const picked = new Map();
+    for (let i = 0; i < printed.length; i++) {
+      if (!isIncorrectForPrint(rows[i])) continue;
+      const problem = printed[i];
+      const refs = referencedPartTokens(`${problem.questionText} ${rows[i]?.question_text ?? ""}`);
+      for (const token of refs) {
+        const prev = printed.find((row) => partTokenOf(row) === token && samePrintUnit(row, problem));
+        if (!prev || picked.has(prev.id)) continue;
+        const role = isIncorrectForPrint(prev) ? "review" : "prerequisite";
+        picked.set(prev.id, { ...prev, printRole: role, isCorrect: role === "prerequisite" });
+      }
+      if (!picked.has(problem.id)) {
+        picked.set(problem.id, { ...problem, printRole: "review", isCorrect: false });
+      }
     }
+    out.push(...picked.values());
   }
   return out;
 }
@@ -162,6 +229,7 @@ export function looksLikePrintedStem(text) {
 }
 
 export const DAILY_PRINT_MAX = 5;
+export const RECOMMENDED_PRINT_MAX = 6;
 
 export function hasPrintableQuestion(item) {
   if (questionTextOf(item)) return true;
@@ -173,13 +241,48 @@ export function hasPrintableQuestion(item) {
   return /[0-9０-９]+(?:\s*[+\-×÷＋−*/]\s*[0-9０-９]+)+/.test(answer);
 }
 
+function isDuePrintItem(item, today) {
+  if (item?.isArchived === true || item?.is_archived === true || item?.status === "retired" || item?.status === "mastered") {
+    return false;
+  }
+  const due = item?.nextReviewAt ?? item?.next_review_at ?? item?.nextReviewOn;
+  return !due || String(due).slice(0, 10) <= today;
+}
+
+function todayIsoLocal(now = new Date()) {
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function recommendedSort(problems, today) {
+  return [...problems].sort((a, b) => {
+    const missA = Number(a?.mistakeCount ?? a?.mistake_count ?? a?.consecutiveMisses ?? 0) || 0;
+    const missB = Number(b?.mistakeCount ?? b?.mistake_count ?? b?.consecutiveMisses ?? 0) || 0;
+    if (missB !== missA) return missB - missA;
+    const dueA = String(a?.nextReviewAt ?? a?.next_review_at ?? a?.nextReviewOn ?? today);
+    const dueB = String(b?.nextReviewAt ?? b?.next_review_at ?? b?.nextReviewOn ?? today);
+    return dueA.localeCompare(dueB);
+  });
+}
+
 export function selectProblemsForScope(problems, scope = "daily", preferredIds = []) {
   const printable = (problems ?? []).filter(hasPrintableQuestion);
   if (scope === "all") return printable;
+  if (scope === "today") {
+    const scans = printable.filter((item) => item?.printSource === "scan");
+    return scans.length ? scans : printable;
+  }
+  if (scope === "recommended") {
+    const today = todayIsoLocal();
+    const due = printable.filter((item) => isDuePrintItem(item, today));
+    return recommendedSort(due.length ? due : printable, today).slice(0, RECOMMENDED_PRINT_MAX);
+  }
   const preferred = new Set((preferredIds ?? []).map((id) => String(id)));
   const first = printable.filter((item) => preferred.has(String(item.id)) || preferred.has(String(item.problemId)));
   const rest = printable.filter((item) => !preferred.has(String(item.id)) && !preferred.has(String(item.problemId)));
-  return [...first, ...rest].slice(0, 5);
+  return [...first, ...rest].slice(0, DAILY_PRINT_MAX);
 }
 
 function mergeKey(problem) {
@@ -211,15 +314,30 @@ function normalizedStem(problem) {
     .trim();
 }
 
+function toAsciiDigits(value) {
+  return String(value ?? "").replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0));
+}
+
 function questionNumberToken(problem) {
+  const stemHit = matchLeadingQuestionNumber(problem?.questionText || problem?.question_text || "");
+  if (stemHit?.token) return stemHit.token;
   const raw = String(
-    problem?.problemIndex || problem?.problem_index || problem?.label || problem?.problem_label || problem?.questionText || "",
+    problem?.problemIndex || problem?.problem_index || problem?.label || problem?.problem_label || "",
   )
     .normalize("NFKC")
     .replace(/\s+/g, "");
+  const pair = raw.match(/([0-9０-９]{1,2})[-−ー~～][\(（]?([0-9０-９]{1,2})/);
+  if (pair) return `${toAsciiDigits(pair[1])}-${toAsciiDigits(pair[2])}`;
+  const resolved = resolveQuestionNumber({
+    questionText: problem?.questionText ?? problem?.question_text,
+    label: problem?.label ?? problem?.problem_label ?? problem?.problemIndex ?? problem?.problem_index,
+    problemLabel: problem?.problem_label,
+    problemIndex: problem?.problemIndex ?? problem?.problem_index,
+  });
+  if (resolved.token) return resolved.token;
   const match = raw.match(/(?:問)?[\(（\[]?([0-9０-９]{1,2})[\)）\]]?/);
   if (!match) return "";
-  return match[1].replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0));
+  return toAsciiDigits(match[1]);
 }
 
 function scanToken(problem) {
@@ -293,6 +411,22 @@ export function dedupePrintProblems(problems) {
   return out;
 }
 
+function attachPrerequisitesFromPool(targets, pool) {
+  const out = [...(targets ?? [])];
+  const seen = new Set(out.map((row) => String(row.id)));
+  for (const item of [...out]) {
+    for (const token of referencedPartTokens(item.questionText)) {
+      const prev = (pool ?? []).find((row) => partTokenOf(row) === token && samePrintUnit(row, item));
+      if (!prev || seen.has(String(prev.id))) continue;
+      const role = isIncorrectForPrint(prev) ? "review" : "prerequisite";
+      seen.add(String(prev.id));
+      const idx = out.findIndex((row) => row.id === item.id);
+      out.splice(idx < 0 ? out.length : idx, 0, { ...prev, printRole: role, isCorrect: role === "prerequisite" });
+    }
+  }
+  return out;
+}
+
 /**
  * 直前の採点（scans）を優先し、復習キューの不正解・空欄を足す。
  * question_text が無い／番号だけの残骸は入れない。
@@ -302,7 +436,7 @@ export function collectPrintProblems(input = {}) {
   const fromScans = printProblemsFromScans(input.scans, childId);
   const fromExtras = (input.extras ?? []).filter(isIncorrectForPrint).map(printProblemFromReview);
   const fromReviews = (input.reviews ?? [])
-    .filter((item) => item?.status !== "mastered" && item?.status !== "retired")
+    .filter((item) => item?.status !== "mastered" && item?.status !== "retired" && item?.isArchived !== true && item?.is_archived !== true)
     .filter(isIncorrectForPrint)
     .map(printProblemFromReview);
   const merged = [];
@@ -318,12 +452,23 @@ export function collectPrintProblems(input = {}) {
     for (const item of extras) seen.add(item);
     merged.push(problem);
   }
-  const unique = dedupePrintProblems(merged);
+  const extraPool = (input.extras ?? []).map((item) =>
+    printProblemFromReview({
+      ...item,
+      printRole: isIncorrectForPrint(item) ? "review" : "prerequisite",
+    }),
+  );
+  const unique = attachPrerequisitesFromPool(dedupePrintProblems(merged), extraPool);
+  const scope = input.scope ?? "all";
+  if (scope === "today") {
+    const todayOnly = dedupePrintProblems(fromScans.filter(hasPrintableQuestion));
+    if (todayOnly.length) return todayOnly;
+  }
   if (unique.length) {
-    return selectProblemsForScope(unique, input.scope ?? "all", input.preferredIds ?? []);
+    return selectProblemsForScope(unique, scope, input.preferredIds ?? []);
   }
   const fallback = dedupePrintProblems(
     (input.fallback ?? []).filter(isIncorrectForPrint).filter(hasPrintableQuestion),
   );
-  return selectProblemsForScope(fallback, input.scope ?? "all", input.preferredIds ?? []);
+  return selectProblemsForScope(fallback, scope, input.preferredIds ?? []);
 }

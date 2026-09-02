@@ -1,6 +1,10 @@
 export const REVIEW_CONFIG = {
   dailyMin: 3,
   dailyMax: 5,
+  recommendedMax: 6,
+  archiveOverdueDays: 30,
+  stage1Days: 3,
+  stage2Days: 7,
   leechMissThreshold: 3,
   masteredIntervalDays: 30,
   masteredHitThreshold: 3,

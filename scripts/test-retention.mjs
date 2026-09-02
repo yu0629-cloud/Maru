@@ -113,7 +113,8 @@ assert.match(hydrateSrc, /original_storage_path/);
 assert.match(hydrateSrc, /created_at/);
 assert.match(hydrateSrc, /Fetched scans count/);
 assert.match(hydrateSrc, /parent_id/);
-assert.match(hydrateSrc, /child_id\.is\.null/);
+assert.match(hydrateSrc, /eq\("child_id"/);
+assert.doesNotMatch(hydrateSrc, /child_id\.is\.null/);
 assert.doesNotMatch(hydrateSrc, /\.gte\("created_at"/);
 assert.doesNotMatch(hydrateSrc, /free_scans_remaining/);
 assert.doesNotMatch(hydrateSrc, /quota\.remaining/);
@@ -214,14 +215,13 @@ const nullChild = history.selectHistoryScans(
   [histScan("orphan", 1, { childId: null })],
   { childId: "c1", tier: "free", now },
 );
-assert.equal(nullChild.length, 1);
-assert.equal(nullChild[0].id, "orphan");
+assert.equal(nullChild.length, 0);
 const mismatchedOnly = history.selectHistoryScans(
   [histScan("x1", 1, { childId: "other-child" })],
   { childId: "c1", tier: "free", now },
 );
-assert.equal(mismatchedOnly[0].id, "x1");
-pass("child_id が null または不一致でも、件数0なら親のスキャンを履歴に出す");
+assert.equal(mismatchedOnly.length, 0);
+pass("選択中の子ども以外のスキャンは履歴に出さない");
 
 const freeCrowded = history.selectHistoryScans(
   [...Array.from({ length: 10 }, (_, index) => histScan(`n${index}`, 1)), histScan("aged", 8)],
